@@ -1,213 +1,129 @@
 package dev.yusufaf.wren
 
+import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
+import com.fsck.k9.mail.ConnectionSecurity
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
-import androidx.wear.compose.foundation.lazy.TransformingLazyColumnItemScope
-import androidx.wear.compose.foundation.lazy.items
-import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
 import androidx.wear.compose.material3.AppScaffold
-import androidx.wear.compose.material3.Card
-import androidx.wear.compose.material3.CardDefaults
-import androidx.wear.compose.material3.ListHeader
-import androidx.wear.compose.material3.ListHeaderDefaults
 import androidx.wear.compose.material3.MaterialTheme
-import androidx.wear.compose.material3.ScreenScaffold
-import androidx.wear.compose.material3.SurfaceTransformation
-import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TimeText
-import androidx.wear.compose.material3.lazy.TransformationSpec
-import androidx.wear.compose.material3.lazy.rememberTransformationSpec
-import androidx.wear.compose.material3.lazy.transformedHeight
-import com.fsck.k9.mail.ConnectionSecurity
-import dev.yusufaf.wren.spike.ImapSpike
-import dev.yusufaf.wren.spike.SpikeReport
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import dev.yusufaf.wren.account.Account
+import dev.yusufaf.wren.account.AccountStore
+import dev.yusufaf.wren.mailkit.MailService
+import dev.yusufaf.wren.ui.AccountSetupScreen
+import dev.yusufaf.wren.ui.InboxScreen
+import dev.yusufaf.wren.ui.InboxState
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val accountStore = AccountStore(applicationContext)
+        val mailService = MailService()
+        seedAccountFromIntentForDebug(accountStore, intent)
         setContent {
             MaterialTheme {
-                WrenApp()
+                WrenApp(accountStore, mailService)
             }
         }
     }
 }
 
 /**
- * Phase 2 spike configuration: a GreenMail test server on the host machine
- * (10.0.2.2 from the emulator), plain IMAP. Replaced by real account setup in
- * Phase 3.
+ * Debuggable builds only: seed the account from launch intent extras so
+ * emulator testing doesn't require the on-watch keyboard, e.g.
+ * `adb shell am start -n dev.yusufaf.wren/.MainActivity --es wren.host 10.0.2.2
+ *  --ei wren.port 3143 --es wren.security NONE --es wren.username wren
+ *  --es wren.password secret`
  */
-private object SpikeServer {
-    const val HOST = "10.0.2.2"
-    const val PORT = 3143
-    val SECURITY = ConnectionSecurity.NONE
-    const val USERNAME = "wren"
-    const val PASSWORD = "secret"
+private fun ComponentActivity.seedAccountFromIntentForDebug(accountStore: AccountStore, intent: Intent?) {
+    val debuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+    if (!debuggable) return
+    val host = intent?.getStringExtra("wren.host") ?: return
+    val security = intent.getStringExtra("wren.security")
+        ?.let { runCatching { ConnectionSecurity.valueOf(it) }.getOrNull() }
+        ?: ConnectionSecurity.SSL_TLS_REQUIRED
+    val account = Account(
+        host = host,
+        port = intent.getIntExtra("wren.port", Account.defaultPortFor(security)),
+        security = security,
+        username = intent.getStringExtra("wren.username") ?: "",
+        password = intent.getStringExtra("wren.password") ?: "",
+    )
+    if (account.isComplete) {
+        // Blocking is fine here: debug-only, one small preferences write before
+        // first composition, avoiding a race with the boot-screen decision.
+        runBlocking { accountStore.save(account) }
+    }
 }
 
-sealed interface SpikeState {
-    data object Loading : SpikeState
-    data class Ready(val report: SpikeReport) : SpikeState
-    data class Failed(val message: String) : SpikeState
-}
+private enum class Screen { Boot, Setup, Inbox }
 
 @Composable
-fun WrenApp() {
-    var state by remember { mutableStateOf<SpikeState>(SpikeState.Loading) }
+fun WrenApp(accountStore: AccountStore, mailService: MailService) {
+    var screen by remember { mutableStateOf(Screen.Boot) }
+    var account by remember { mutableStateOf<Account?>(null) }
+    var inboxState by remember { mutableStateOf<InboxState>(InboxState.Loading) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
-        state = withContext(Dispatchers.IO) {
-            try {
-                SpikeState.Ready(
-                    ImapSpike.run(
-                        host = SpikeServer.HOST,
-                        port = SpikeServer.PORT,
-                        security = SpikeServer.SECURITY,
-                        username = SpikeServer.USERNAME,
-                        password = SpikeServer.PASSWORD,
-                    ),
-                )
-            } catch (e: Exception) {
-                SpikeState.Failed(e.toString())
+        accountStore.account.collect { stored ->
+            account = stored
+            if (screen == Screen.Boot) {
+                screen = if (stored == null) Screen.Setup else Screen.Inbox
             }
         }
+    }
+
+    fun refreshInbox() {
+        val current = account ?: return
+        inboxState = InboxState.Loading
+        scope.launch {
+            inboxState = try {
+                InboxState.Ready(mailService.fetchInbox(current))
+            } catch (e: Exception) {
+                InboxState.Failed(e.message ?: e.toString())
+            }
+        }
+    }
+
+    LaunchedEffect(screen, account) {
+        if (screen == Screen.Inbox && account != null) refreshInbox()
     }
 
     AppScaffold(timeText = { TimeText() }) {
-        InboxScreen(state = state)
-    }
-}
+        when (screen) {
+            Screen.Boot -> Unit
 
-@Composable
-fun InboxScreen(state: SpikeState) {
-    val listState = rememberTransformingLazyColumnState()
-    val transformationSpec = rememberTransformationSpec()
-
-    ScreenScaffold(scrollState = listState) { contentPadding ->
-        TransformingLazyColumn(
-            state = listState,
-            contentPadding = contentPadding,
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            item {
-                ListHeader(
-                    modifier = Modifier
-                        .minimumVerticalContentPadding(
-                            ListHeaderDefaults.minimumTopListContentPadding,
-                            ListHeaderDefaults.minimumBottomListContentPadding,
-                        )
-                        .transformedHeight(this, transformationSpec),
-                    transformation = SurfaceTransformation(transformationSpec),
-                ) {
-                    Text("Inbox")
-                }
-            }
-            when (state) {
-                is SpikeState.Loading -> item {
-                    StatusCard(
-                        text = "Connecting to ${SpikeServer.HOST}:${SpikeServer.PORT}…",
-                        transformation = SurfaceTransformation(transformationSpec),
-                        modifier = envelopeModifier(transformationSpec),
-                    )
-                }
-
-                is SpikeState.Failed -> item {
-                    StatusCard(
-                        text = state.message,
-                        transformation = SurfaceTransformation(transformationSpec),
-                        modifier = envelopeModifier(transformationSpec),
-                    )
-                }
-
-                is SpikeState.Ready -> {
-                    item {
-                        StatusCard(
-                            text = "${state.report.messageCount} messages, " +
-                                "fetched in ${state.report.elapsedMs} ms",
-                            transformation = SurfaceTransformation(transformationSpec),
-                            modifier = envelopeModifier(transformationSpec),
-                        )
+            Screen.Setup -> AccountSetupScreen(
+                initial = account,
+                onValidateAndSave = { candidate ->
+                    try {
+                        mailService.checkSettings(candidate)
+                        accountStore.save(candidate)
+                        null
+                    } catch (e: Exception) {
+                        e.message ?: e.toString()
                     }
-                    items(state.report.envelopes, key = { it.uid }) { envelope ->
-                        Card(
-                            onClick = { /* Message view arrives in Phase 3. */ },
-                            modifier = envelopeModifier(transformationSpec),
-                            transformation = SurfaceTransformation(transformationSpec),
-                        ) {
-                            Text(
-                                text = envelope.sender,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = if (envelope.unread) FontWeight.Bold else FontWeight.Normal,
-                                color = if (envelope.unread) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                },
-                            )
-                            Text(
-                                text = envelope.subject,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = if (envelope.unread) FontWeight.Bold else FontWeight.Normal,
-                            )
-                            Text(
-                                text = envelope.date,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    state.report.firstBody?.let { body ->
-                        item {
-                            StatusCard(
-                                text = "Latest body:\n${body.take(280)}",
-                                transformation = SurfaceTransformation(transformationSpec),
-                                modifier = envelopeModifier(transformationSpec),
-                            )
-                        }
-                    }
-                }
-            }
+                },
+                onSaved = { screen = Screen.Inbox },
+            )
+
+            Screen.Inbox -> InboxScreen(
+                state = inboxState,
+                onRefresh = ::refreshInbox,
+                onOpenSettings = { screen = Screen.Setup },
+            )
         }
-    }
-}
-
-@Composable
-private fun TransformingLazyColumnItemScope.envelopeModifier(spec: TransformationSpec): Modifier =
-    Modifier
-        .fillMaxWidth()
-        .minimumVerticalContentPadding(CardDefaults.minimumVerticalListContentPadding)
-        .transformedHeight(this, spec)
-
-@Composable
-private fun StatusCard(
-    text: String,
-    transformation: SurfaceTransformation,
-    modifier: Modifier = Modifier,
-) {
-    Card(
-        onClick = {},
-        modifier = modifier,
-        transformation = transformation,
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }

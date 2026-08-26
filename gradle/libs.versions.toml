@@ -16,6 +16,8 @@ kotlinxCoroutines = "1.10.2"
 mime4j = "0.8.14"
 moshi = "1.15.2"
 okio = "3.18.1"
+androidxDatastore = "1.1.7"
+androidxWearInput = "1.1.0"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "androidGradlePlugin" }
@@ -38,4 +40,6 @@ kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutine
 mime4j-core = { module = "org.apache.james:apache-mime4j-core", version.ref = "mime4j" }
 mime4j-dom = { module = "org.apache.james:apache-mime4j-dom", version.ref = "mime4j" }
 moshi = { module = "com.squareup.moshi:moshi", version.ref = "moshi" }
+androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "androidxDatastore" }
+androidx-wear-input = { module = "androidx.wear:wear-input", version.ref = "androidxWearInput" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
