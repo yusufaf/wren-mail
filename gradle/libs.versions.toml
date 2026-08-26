@@ -6,12 +6,36 @@ androidxActivity = "1.13.0"
 androidxWearCompose = "1.6.2"
 androidxComposeUi = "1.9.4"
 
+androidxAnnotation = "1.9.1"
+apacheHttpclient5 = "5.6.4"
+commonsIo = "2.22.0"
+jetbrainsAnnotations = "26.1.0"
+jutf7 = "1.0.0"
+jzlib = "1.0.7"
+kotlinxCoroutines = "1.10.2"
+mime4j = "0.8.14"
+moshi = "1.15.2"
+okio = "3.18.1"
+
 [plugins]
 android-application = { id = "com.android.application", version.ref = "androidGradlePlugin" }
 compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivity" }
 androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview", version.ref = "androidxComposeUi" }
 androidx-wear-compose-foundation = { module = "androidx.wear.compose:compose-foundation", version.ref = "androidxWearCompose" }
 androidx-wear-compose-material3 = { module = "androidx.wear.compose:compose-material3", version.ref = "androidxWearCompose" }
+
+androidx-annotation = { module = "androidx.annotation:annotation", version.ref = "androidxAnnotation" }
+apache-httpclient5 = { module = "org.apache.httpcomponents.client5:httpclient5", version.ref = "apacheHttpclient5" }
+commons-io = { module = "commons-io:commons-io", version.ref = "commonsIo" }
+jetbrains-annotations = { module = "org.jetbrains:annotations", version.ref = "jetbrainsAnnotations" }
+jutf7 = { module = "com.beetstra.jutf7:jutf7", version.ref = "jutf7" }
+jzlib = { module = "com.jcraft:jzlib", version.ref = "jzlib" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
+mime4j-core = { module = "org.apache.james:apache-mime4j-core", version.ref = "mime4j" }
+mime4j-dom = { module = "org.apache.james:apache-mime4j-dom", version.ref = "mime4j" }
+moshi = { module = "com.squareup.moshi:moshi", version.ref = "moshi" }
+okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
