@@ -88,7 +88,7 @@ fun InboxScreen(envelopes: List<EnvelopePreview>) {
             items(envelopes, key = { it.id }) { envelope ->
                 EnvelopeCard(
                     envelope = envelope,
-                    transformationSpec = transformationSpec,
+                    transformation = SurfaceTransformation(transformationSpec),
                     modifier = Modifier
                         .fillMaxWidth()
                         .minimumVerticalContentPadding(
@@ -104,13 +104,13 @@ fun InboxScreen(envelopes: List<EnvelopePreview>) {
 @Composable
 private fun EnvelopeCard(
     envelope: EnvelopePreview,
-    transformationSpec: androidx.wear.compose.material3.lazy.TransformationSpec,
+    transformation: SurfaceTransformation,
     modifier: Modifier = Modifier,
 ) {
     Card(
         onClick = { /* Message view arrives in Phase 3. */ },
         modifier = modifier,
-        transformation = SurfaceTransformation(transformationSpec),
+        transformation = transformation,
     ) {
         Text(
             text = envelope.sender,
