@@ -54,4 +54,6 @@ dependencies {
     implementation(libs.androidx.wear.compose.foundation)
     implementation(libs.androidx.wear.compose.material3)
     implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.wear.input)
 }
