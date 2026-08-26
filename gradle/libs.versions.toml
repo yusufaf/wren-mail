@@ -18,11 +18,14 @@ moshi = "1.15.2"
 okio = "3.18.1"
 androidxDatastore = "1.1.7"
 androidxWearInput = "1.1.0"
+kotlinxSerialization = "1.9.0"
+androidxNavigation3 = "1.0.0"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "androidGradlePlugin" }
 compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivity" }
@@ -42,4 +45,8 @@ mime4j-dom = { module = "org.apache.james:apache-mime4j-dom", version.ref = "mim
 moshi = { module = "com.squareup.moshi:moshi", version.ref = "moshi" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "androidxDatastore" }
 androidx-wear-input = { module = "androidx.wear:wear-input", version.ref = "androidxWearInput" }
+androidx-wear-compose-navigation3 = { module = "androidx.wear.compose:compose-navigation3", version.ref = "androidxWearCompose" }
+kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "kotlinxSerialization" }
+androidx-navigation3-runtime = { module = "androidx.navigation3:navigation3-runtime", version.ref = "androidxNavigation3" }
+androidx-navigation3-ui = { module = "androidx.navigation3:navigation3-ui", version.ref = "androidxNavigation3" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
