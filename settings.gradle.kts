@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "wren-mail"
 
 include(":app")
+include(":mail")
