@@ -7,6 +7,7 @@ import com.fsck.k9.mail.ServerSettings
 import com.fsck.k9.mail.internet.MessageExtractor
 import com.fsck.k9.mail.ssl.TrustedSocketFactory
 import com.fsck.k9.mail.store.imap.ImapClientInfo
+import com.fsck.k9.mail.store.imap.ImapFolder
 import com.fsck.k9.mail.store.imap.ImapStore
 import com.fsck.k9.mail.store.imap.ImapStoreConfig
 import com.fsck.k9.mail.store.imap.OpenMode
@@ -57,8 +58,9 @@ object ImapSpike {
             clientCertificateAlias = null,
         )
         val store = ImapStore.create(settings, SpikeConfig, SpikeSocketFactory, oauthTokenProvider = null)
-        val folder = store.getFolder("INBOX")
+        var folder: ImapFolder? = null
         try {
+            folder = store.getFolder("INBOX")
             folder.open(OpenMode.READ_ONLY)
             val count = folder.messageCount
             val messages = if (count > 0) {
@@ -96,7 +98,7 @@ object ImapSpike {
                 elapsedMs = System.currentTimeMillis() - start,
             )
         } finally {
-            folder.close()
+            folder?.close()
             store.closeAllConnections()
         }
     }
