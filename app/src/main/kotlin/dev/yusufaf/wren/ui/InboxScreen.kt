@@ -24,11 +24,16 @@ import androidx.wear.compose.material3.lazy.rememberTransformationSpec
 import androidx.wear.compose.material3.lazy.transformedHeight
 import dev.yusufaf.wren.mailkit.Envelope
 
-sealed interface InboxState {
-    data object Loading : InboxState
-    data class Failed(val message: String) : InboxState
-    data class Ready(val envelopes: List<Envelope>) : InboxState
-}
+/**
+ * Cache-first inbox state: [envelopes] is null only until the Room cache emits
+ * its first value; [refreshing]/[error] describe the network update layered on
+ * top of whatever the cache holds.
+ */
+data class InboxState(
+    val envelopes: List<Envelope>?,
+    val refreshing: Boolean,
+    val error: String?,
+)
 
 @Composable
 fun InboxScreen(
@@ -60,25 +65,30 @@ fun InboxScreen(
                     Text("Inbox")
                 }
             }
-            when (state) {
-                is InboxState.Loading -> item {
+            val envelopes = state.envelopes
+            when {
+                envelopes == null || (envelopes.isEmpty() && state.refreshing) -> item {
                     MessageCard("Loading…", transformationSpec)
                 }
 
-                is InboxState.Failed -> {
-                    item { MessageCard(state.message, transformationSpec) }
-                    item { ActionRow("Retry", transformationSpec, onRefresh) }
+                envelopes.isEmpty() -> item {
+                    MessageCard(state.error ?: "No messages", transformationSpec)
                 }
 
-                is InboxState.Ready -> {
-                    if (state.envelopes.isEmpty()) {
-                        item { MessageCard("No messages", transformationSpec) }
+                else -> {
+                    if (state.refreshing) {
+                        item { MessageCard("Refreshing…", transformationSpec) }
                     }
-                    items(state.envelopes, key = { it.uid }) { envelope ->
+                    state.error?.let { error ->
+                        item { MessageCard(error, transformationSpec) }
+                    }
+                    items(envelopes, key = { it.uid }) { envelope ->
                         EnvelopeCard(envelope, transformationSpec) { onOpenMessage(envelope.uid) }
                     }
-                    item { ActionRow("Refresh", transformationSpec, onRefresh) }
                 }
+            }
+            if (envelopes != null && !state.refreshing) {
+                item { ActionRow(if (state.error != null) "Retry" else "Refresh", transformationSpec, onRefresh) }
             }
             item {
                 ActionRow("Account settings", transformationSpec, onOpenSettings)

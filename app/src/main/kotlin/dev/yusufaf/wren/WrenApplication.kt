@@ -2,9 +2,18 @@ package dev.yusufaf.wren
 
 import android.app.Application
 import com.fsck.k9.mail.internet.BinaryTempFileBody
+import dev.yusufaf.wren.account.AccountStore
+import dev.yusufaf.wren.data.MailRepository
+import dev.yusufaf.wren.data.WrenDatabase
+import dev.yusufaf.wren.mailkit.MailService
+import dev.yusufaf.wren.sync.SyncWorker
 import net.thunderbird.legacy.logging.Log
 
 class WrenApplication : Application() {
+
+    val accountStore by lazy { AccountStore(this) }
+    val repository by lazy { MailRepository(WrenDatabase.create(this), MailService()) }
+
     override fun onCreate() {
         super.onCreate()
         BinaryTempFileBody.setTempDirectory(cacheDir)
@@ -18,5 +27,6 @@ class WrenApplication : Application() {
                 Log.Priority.ERROR -> android.util.Log.e(tag, message, throwable)
             }
         }
+        SyncWorker.schedule(this)
     }
 }

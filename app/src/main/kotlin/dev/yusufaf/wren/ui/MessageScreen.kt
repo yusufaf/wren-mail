@@ -25,7 +25,7 @@ import androidx.wear.compose.material3.lazy.TransformationSpec
 import androidx.wear.compose.material3.lazy.rememberTransformationSpec
 import androidx.wear.compose.material3.lazy.transformedHeight
 import dev.yusufaf.wren.account.Account
-import dev.yusufaf.wren.mailkit.MailService
+import dev.yusufaf.wren.data.MailRepository
 import dev.yusufaf.wren.mailkit.MessageDetail
 import kotlinx.coroutines.launch
 
@@ -37,14 +37,15 @@ private sealed interface MessageState {
 
 /**
  * Plain-text message view with the v1 triage actions. Opening the message
- * marks it read on the server; archive/delete/mark-unread run the IMAP
- * operation and then leave the screen via [onDone].
+ * marks it read on the server; archive/delete/mark-unread apply to the cache
+ * immediately (queued for the server when offline) and then leave the screen
+ * via [onDone].
  */
 @Composable
 fun MessageScreen(
     account: Account,
     uid: String,
-    mailService: MailService,
+    repository: MailRepository,
     onDone: () -> Unit,
 ) {
     val listState = rememberTransformingLazyColumnState()
@@ -57,7 +58,7 @@ fun MessageScreen(
 
     LaunchedEffect(uid) {
         state = try {
-            MessageState.Ready(mailService.fetchMessage(account, uid))
+            MessageState.Ready(repository.fetchMessage(account, uid))
         } catch (e: Exception) {
             MessageState.Failed(e.message ?: e.toString())
         }
@@ -127,12 +128,12 @@ fun MessageScreen(
                     }
                     item {
                         ActionButton("Archive", transformationSpec, busy) {
-                            runAction(leaveAfter = true) { mailService.archiveMessage(account, uid) }
+                            runAction(leaveAfter = true) { repository.archive(account, uid) }
                         }
                     }
                     item {
                         ActionButton("Delete", transformationSpec, busy) {
-                            runAction(leaveAfter = true) { mailService.deleteMessage(account, uid) }
+                            runAction(leaveAfter = true) { repository.delete(account, uid) }
                         }
                     }
                     item {
@@ -142,14 +143,14 @@ fun MessageScreen(
                             busy,
                         ) {
                             runAction(leaveAfter = false) {
-                                mailService.setFlagged(account, uid, !detail.flagged)
+                                repository.setFlagged(account, uid, !detail.flagged)
                                 state = MessageState.Ready(detail.copy(flagged = !detail.flagged))
                             }
                         }
                     }
                     item {
                         ActionButton("Mark unread", transformationSpec, busy) {
-                            runAction(leaveAfter = true) { mailService.setUnread(account, uid, true) }
+                            runAction(leaveAfter = true) { repository.setUnread(account, uid, true) }
                         }
                     }
                 }
