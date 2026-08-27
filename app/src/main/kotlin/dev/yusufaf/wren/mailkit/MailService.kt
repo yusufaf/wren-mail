@@ -99,7 +99,7 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
                 sender = message.senderDisplayName(),
                 subject = message.subject ?: "(no subject)",
                 date = message.sentDate?.let(dateFormat::format) ?: "",
-                body = MessageExtractor.getTextFromPart(message, MAX_DOWNLOAD_SIZE.toLong())
+                body = BodyExtractor.extract(message, MAX_DOWNLOAD_SIZE.toLong())
                     ?.trim()
                     ?.takeIf { it.isNotEmpty() }
                     ?: "(no text content)",
