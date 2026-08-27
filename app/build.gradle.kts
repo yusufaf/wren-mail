@@ -24,6 +24,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            // Debug-signed so the release build can be sideloaded for testing;
+            // a real release keystore comes with the first published build.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
