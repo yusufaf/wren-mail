@@ -42,11 +42,11 @@ class WrenTrustedSocketFactory(keyStoreDirectory: File) : TrustedSocketFactory {
             // STARTTLS: wrap the already-connected plain socket.
             factory.createSocket(socket, host, port, true)
         }
-        (sslSocket as? SSLSocket)?.let { ssl ->
-            // SNI, so shared hosts present the certificate for [host].
-            ssl.sslParameters = ssl.sslParameters.apply {
-                serverNames = listOf(SNIHostName(host))
-            }
+        // SNI, so shared hosts present the certificate for [host]. Hard cast:
+        // an SSLContext factory always returns SSLSocket, and silently skipping
+        // SNI would be worse than crashing here.
+        (sslSocket as SSLSocket).sslParameters = sslSocket.sslParameters.apply {
+            serverNames = listOf(SNIHostName(host))
         }
         return sslSocket
     }
