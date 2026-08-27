@@ -35,6 +35,7 @@ fun InboxScreen(
     state: InboxState,
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenMessage: (String) -> Unit,
 ) {
     val listState = rememberTransformingLazyColumnState()
     val transformationSpec = rememberTransformationSpec()
@@ -74,7 +75,7 @@ fun InboxScreen(
                         item { MessageCard("No messages", transformationSpec) }
                     }
                     items(state.envelopes, key = { it.uid }) { envelope ->
-                        EnvelopeCard(envelope, transformationSpec)
+                        EnvelopeCard(envelope, transformationSpec) { onOpenMessage(envelope.uid) }
                     }
                     item { ActionRow("Refresh", transformationSpec, onRefresh) }
                 }
@@ -90,9 +91,10 @@ fun InboxScreen(
 private fun TransformingLazyColumnItemScope.EnvelopeCard(
     envelope: Envelope,
     transformationSpec: TransformationSpec,
+    onClick: () -> Unit,
 ) {
     Card(
-        onClick = { /* Message view arrives in the next PR. */ },
+        onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
             .minimumVerticalContentPadding(CardDefaults.minimumVerticalListContentPadding)
@@ -100,7 +102,7 @@ private fun TransformingLazyColumnItemScope.EnvelopeCard(
         transformation = SurfaceTransformation(transformationSpec),
     ) {
         Text(
-            text = envelope.sender,
+            text = if (envelope.flagged) "⚑ ${envelope.sender}" else envelope.sender,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = if (envelope.unread) FontWeight.Bold else FontWeight.Normal,
             color = if (envelope.unread) {
