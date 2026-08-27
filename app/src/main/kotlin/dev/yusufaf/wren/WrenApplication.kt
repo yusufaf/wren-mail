@@ -6,13 +6,20 @@ import dev.yusufaf.wren.account.AccountStore
 import dev.yusufaf.wren.data.MailRepository
 import dev.yusufaf.wren.data.WrenDatabase
 import dev.yusufaf.wren.mailkit.MailService
+import dev.yusufaf.wren.mailkit.WrenTrustedSocketFactory
 import dev.yusufaf.wren.sync.SyncWorker
+import java.io.File
 import net.thunderbird.legacy.logging.Log
 
 class WrenApplication : Application() {
 
     val accountStore by lazy { AccountStore(this) }
-    val repository by lazy { MailRepository(WrenDatabase.create(this), MailService()) }
+    val repository by lazy {
+        MailRepository(
+            WrenDatabase.create(this),
+            MailService(WrenTrustedSocketFactory(File(filesDir, "ssl-keystore"))),
+        )
+    }
 
     override fun onCreate() {
         super.onCreate()
