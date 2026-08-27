@@ -11,9 +11,7 @@ import com.fsck.k9.mail.store.imap.ImapStore
 import com.fsck.k9.mail.store.imap.ImapStoreConfig
 import com.fsck.k9.mail.store.imap.OpenMode
 import dev.yusufaf.wren.account.Account
-import java.net.Socket
 import java.text.DateFormat
-import javax.net.ssl.SSLContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.thunderbird.core.common.mail.Flag
@@ -41,7 +39,7 @@ data class MessageDetail(
  * its own connection and closes it before returning; no caching yet (Room
  * lands later in Phase 3).
  */
-class MailService {
+class MailService(private val socketFactory: TrustedSocketFactory) {
 
     /** Throws MessagingException (or IOException) when settings are wrong. */
     suspend fun checkSettings(account: Account) {
@@ -184,7 +182,7 @@ class MailService {
             password = account.password,
             clientCertificateAlias = null,
         )
-        return ImapStore.create(settings, WrenImapConfig, SystemTrustSocketFactory, oauthTokenProvider = null)
+        return ImapStore.create(settings, WrenImapConfig, socketFactory, oauthTokenProvider = null)
     }
 
     private object WrenImapConfig : ImapStoreConfig {
@@ -192,23 +190,6 @@ class MailService {
         override fun isSubscribedFoldersOnly() = false
         override fun isExpungeImmediately() = true
         override fun clientInfo() = ImapClientInfo(appName = "Wren", appVersion = "0.1.0")
-    }
-
-    /** TLS sockets validated against the system trust store. */
-    private object SystemTrustSocketFactory : TrustedSocketFactory {
-        override fun createSocket(
-            socket: Socket?,
-            host: String,
-            port: Int,
-            clientCertificateAlias: String?,
-        ): Socket {
-            val factory = SSLContext.getInstance("TLS").apply { init(null, null, null) }.socketFactory
-            return if (socket == null) {
-                factory.createSocket(host, port)
-            } else {
-                factory.createSocket(socket, host, port, true)
-            }
-        }
     }
 
     companion object {
