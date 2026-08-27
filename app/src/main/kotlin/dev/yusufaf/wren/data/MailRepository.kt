@@ -49,28 +49,39 @@ class MailRepository(
     }
 
     suspend fun archive(account: Account, uid: String) {
-        db.inboxDao().remove(uid)
-        enqueue(account, PendingOp(uid = uid, type = PendingOp.ARCHIVE))
+        triage(account, PendingOp(uid = uid, type = PendingOp.ARCHIVE)) {
+            db.inboxDao().remove(uid)
+        }
     }
 
     suspend fun delete(account: Account, uid: String) {
-        db.inboxDao().remove(uid)
-        enqueue(account, PendingOp(uid = uid, type = PendingOp.DELETE))
+        triage(account, PendingOp(uid = uid, type = PendingOp.DELETE)) {
+            db.inboxDao().remove(uid)
+        }
     }
 
     suspend fun setFlagged(account: Account, uid: String, flagged: Boolean) {
-        db.inboxDao().setFlagged(uid, flagged)
-        enqueue(account, PendingOp(uid = uid, type = PendingOp.SET_FLAGGED, value = flagged))
+        triage(account, PendingOp(uid = uid, type = PendingOp.SET_FLAGGED, value = flagged)) {
+            db.inboxDao().setFlagged(uid, flagged)
+        }
     }
 
     suspend fun setUnread(account: Account, uid: String, unread: Boolean) {
-        db.inboxDao().setUnread(uid, unread)
-        enqueue(account, PendingOp(uid = uid, type = PendingOp.SET_SEEN, value = !unread))
+        triage(account, PendingOp(uid = uid, type = PendingOp.SET_SEEN, value = !unread)) {
+            db.inboxDao().setUnread(uid, unread)
+        }
     }
 
-    private suspend fun enqueue(account: Account, op: PendingOp) {
+    /**
+     * The op is persisted BEFORE the optimistic cache change so a concurrent
+     * refresh (which flushes ops first) or a crash between the two writes can
+     * never lose the action — the cache change is idempotent and any stale
+     * state self-heals on the next refresh. Flushing is best effort: offline
+     * just leaves the op queued for the sync worker.
+     */
+    private suspend fun triage(account: Account, op: PendingOp, applyToCache: suspend () -> Unit) {
         db.pendingOpDao().insert(op)
-        // Best effort: offline just leaves the op queued for the sync worker.
+        applyToCache()
         runCatching { flushPendingOps(account) }
     }
 
