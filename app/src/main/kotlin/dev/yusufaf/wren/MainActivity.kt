@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -23,7 +24,7 @@ import androidx.wear.compose.navigation3.SwipeDismissableSceneStrategy
 import com.fsck.k9.mail.ConnectionSecurity
 import dev.yusufaf.wren.account.Account
 import dev.yusufaf.wren.account.AccountStore
-import dev.yusufaf.wren.mailkit.MailService
+import dev.yusufaf.wren.data.MailRepository
 import dev.yusufaf.wren.ui.AccountSetupScreen
 import dev.yusufaf.wren.ui.InboxScreen
 import dev.yusufaf.wren.ui.InboxState
@@ -35,12 +36,11 @@ import kotlinx.serialization.Serializable
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val accountStore = AccountStore(applicationContext)
-        val mailService = MailService()
-        seedAccountFromIntentForDebug(accountStore, intent)
+        val app = application as WrenApplication
+        seedAccountFromIntentForDebug(app.accountStore, intent)
         setContent {
             MaterialTheme {
-                WrenApp(accountStore, mailService)
+                WrenApp(app.accountStore, app.repository)
             }
         }
     }
@@ -84,11 +84,13 @@ private data object SetupKey : NavKey
 private data class MessageKey(val uid: String) : NavKey
 
 @Composable
-fun WrenApp(accountStore: AccountStore, mailService: MailService) {
+fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
     val backStack = rememberNavBackStack(InboxKey)
     var account by remember { mutableStateOf<Account?>(null) }
     var accountLoaded by remember { mutableStateOf(false) }
-    var inboxState by remember { mutableStateOf<InboxState>(InboxState.Loading) }
+    val envelopes by repository.inbox.collectAsState(initial = null)
+    var refreshing by remember { mutableStateOf(false) }
+    var refreshError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
@@ -103,18 +105,22 @@ fun WrenApp(accountStore: AccountStore, mailService: MailService) {
 
     fun refreshInbox() {
         val current = account ?: return
-        inboxState = InboxState.Loading
+        if (refreshing) return
+        refreshing = true
+        refreshError = null
         scope.launch {
-            inboxState = try {
-                InboxState.Ready(mailService.fetchInbox(current))
+            try {
+                repository.refresh(current)
             } catch (e: Exception) {
-                InboxState.Failed(e.message ?: e.toString())
+                refreshError = e.message ?: e.toString()
             }
+            refreshing = false
         }
     }
 
     // Covers first load (account arriving) and every return to the inbox —
-    // action-driven pops and swipe-dismiss alike.
+    // action-driven pops and swipe-dismiss alike. The cached list shows
+    // instantly either way; this only kicks off the network update.
     LaunchedEffect(account, backStack.lastOrNull()) {
         if (account != null && backStack.lastOrNull() is InboxKey) refreshInbox()
     }
@@ -127,7 +133,7 @@ fun WrenApp(accountStore: AccountStore, mailService: MailService) {
             entryProvider = entryProvider {
                 entry<InboxKey> {
                     InboxScreen(
-                        state = inboxState,
+                        state = InboxState(envelopes, refreshing, refreshError),
                         onRefresh = ::refreshInbox,
                         onOpenSettings = { backStack.add(SetupKey) },
                         onOpenMessage = { uid -> backStack.add(MessageKey(uid)) },
@@ -138,7 +144,7 @@ fun WrenApp(accountStore: AccountStore, mailService: MailService) {
                         initial = account,
                         onValidateAndSave = { candidate ->
                             try {
-                                mailService.checkSettings(candidate)
+                                repository.checkSettings(candidate)
                                 accountStore.save(candidate)
                                 null
                             } catch (e: Exception) {
@@ -154,7 +160,7 @@ fun WrenApp(accountStore: AccountStore, mailService: MailService) {
                         MessageScreen(
                             account = current,
                             uid = key.uid,
-                            mailService = mailService,
+                            repository = repository,
                             onDone = { backStack.removeLastOrNull() },
                         )
                     }
