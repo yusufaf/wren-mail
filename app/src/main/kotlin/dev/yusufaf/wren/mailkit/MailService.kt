@@ -48,6 +48,7 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
     private val storeMutex = Mutex()
     private var cachedAccount: Account? = null
     private var cachedStore: ImapStore? = null
+    private var archiveFolderReady = false
 
     /** Throws MessagingException (or IOException) when settings are wrong. */
     suspend fun checkSettings(account: Account) {
@@ -137,11 +138,20 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
         }
     }
 
-    /** Moves the message to the archive folder, creating the folder if needed. */
+    /**
+     * Moves the message to the archive folder, creating the folder if needed.
+     * The exists()/create() probe touches its own connection and is only
+     * worth paying for once per store lifetime — [archiveFolderReady] skips
+     * it (and the connection it would otherwise leave sitting unused in the
+     * pool) on every archive after the first.
+     */
     suspend fun archiveMessage(account: Account, uid: String) {
         withStore(account) { store ->
             val archive = store.getFolder(ARCHIVE_FOLDER)
-            if (!archive.exists()) archive.create()
+            if (!archiveFolderReady) {
+                if (!archive.exists()) archive.create()
+                archiveFolderReady = true
+            }
             val inbox = store.getFolder(INBOX_FOLDER)
             try {
                 inbox.open(OpenMode.READ_WRITE)
@@ -201,6 +211,7 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
             if (cachedAccount == account) return store
             store.closeAllConnections()
         }
+        archiveFolderReady = false
         return buildStore(account).also {
             cachedAccount = account
             cachedStore = it
