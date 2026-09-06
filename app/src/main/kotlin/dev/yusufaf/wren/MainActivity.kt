@@ -150,6 +150,10 @@ fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
             // action taken while offline still has a PendingOp waiting —
             // give it a chance to reach the server now, rather than making
             // it wait for the next stale window or the 15-minute worker.
+            // Clearing refreshError here too: trusting the cache as fresh
+            // enough to skip a refetch while still showing a stale error
+            // banner from an earlier failed refresh would be self-contradictory.
+            refreshError = null
             scope.launch { runCatching { repository.flushPendingOps(current) } }
             return
         }
