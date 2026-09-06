@@ -3,7 +3,6 @@ package dev.yusufaf.wren.mailkit
 import com.fsck.k9.mail.AuthType
 import com.fsck.k9.mail.FetchProfile
 import com.fsck.k9.mail.ServerSettings
-import com.fsck.k9.mail.internet.MessageExtractor
 import com.fsck.k9.mail.ssl.TrustedSocketFactory
 import com.fsck.k9.mail.store.imap.ImapClientInfo
 import com.fsck.k9.mail.store.imap.ImapFolder
@@ -13,6 +12,8 @@ import com.fsck.k9.mail.store.imap.OpenMode
 import dev.yusufaf.wren.account.Account
 import java.text.DateFormat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import net.thunderbird.core.common.mail.Flag
 
@@ -35,16 +36,25 @@ data class MessageDetail(
 )
 
 /**
- * Thin synchronous-IMAP facade over the vendored mail stack. Every call opens
- * its own connection and closes it before returning; no caching yet (Room
- * lands later in Phase 3).
+ * Thin IMAP facade over the vendored mail stack. Holds one [ImapStore] per
+ * [Account], reused across calls so the underlying connection pool
+ * ([com.fsck.k9.mail.store.imap.RealImapStore]) actually gets to pool
+ * connections instead of paying a fresh TCP+TLS+LOGIN for every operation.
+ * [storeMutex] serializes access so a UI call and [SyncWorker]'s refresh
+ * can't race on the same store.
  */
 class MailService(private val socketFactory: TrustedSocketFactory) {
 
+    private val storeMutex = Mutex()
+    private var cachedAccount: Account? = null
+    private var cachedStore: ImapStore? = null
+
     /** Throws MessagingException (or IOException) when settings are wrong. */
     suspend fun checkSettings(account: Account) {
+        // Deliberately not cached: this validates credentials before they're
+        // saved, so there is nothing yet to reuse the connection for.
         withContext(Dispatchers.IO) {
-            val store = createStore(account)
+            val store = buildStore(account)
             try {
                 store.checkSettings()
             } finally {
@@ -79,17 +89,22 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
         }
     }
 
-    /** Fetches the plain-text body and marks the message as read. */
+    /**
+     * Fetches the plain-text body and marks the message as read. Uses
+     * BODY_SANE (capped at [MAX_DOWNLOAD_SIZE]) rather than BODY, which is
+     * the only fetch item the server actually honors maxDownloadSize for —
+     * BODY pulls the whole RFC822 message uncapped over the radio. Envelope,
+     * flags and body are fetched in one round trip.
+     */
     suspend fun fetchMessage(account: Account, uid: String): MessageDetail {
         return withInbox(account, OpenMode.READ_WRITE) { folder ->
             val message = folder.getMessage(uid)
-            val envelopeProfile = FetchProfile().apply {
+            val profile = FetchProfile().apply {
                 add(FetchProfile.Item.ENVELOPE)
                 add(FetchProfile.Item.FLAGS)
+                add(FetchProfile.Item.BODY_SANE)
             }
-            folder.fetch(listOf(message), envelopeProfile, null, MAX_DOWNLOAD_SIZE)
-            val bodyProfile = FetchProfile().apply { add(FetchProfile.Item.BODY) }
-            folder.fetch(listOf(message), bodyProfile, null, MAX_DOWNLOAD_SIZE)
+            folder.fetch(listOf(message), profile, null, MAX_DOWNLOAD_SIZE)
 
             folder.setFlags(listOf(message), setOf(Flag.SEEN), true)
 
@@ -124,18 +139,28 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
 
     /** Moves the message to the archive folder, creating the folder if needed. */
     suspend fun archiveMessage(account: Account, uid: String) {
-        withContext(Dispatchers.IO) {
-            val store = createStore(account)
-            var inbox: ImapFolder? = null
+        withStore(account) { store ->
+            val archive = store.getFolder(ARCHIVE_FOLDER)
+            if (!archive.exists()) archive.create()
+            val inbox = store.getFolder(INBOX_FOLDER)
             try {
-                val archive = store.getFolder(ARCHIVE_FOLDER)
-                if (!archive.exists()) archive.create()
-                inbox = store.getFolder(INBOX_FOLDER)
                 inbox.open(OpenMode.READ_WRITE)
                 inbox.moveMessages(listOf(inbox.getMessage(uid)), archive)
             } finally {
-                inbox?.close()
-                store.closeAllConnections()
+                inbox.close()
+            }
+        }
+    }
+
+    /**
+     * Closes any pooled connection without discarding the cached store, so
+     * an idle socket isn't held open while the app is backgrounded. The next
+     * call transparently reconnects.
+     */
+    suspend fun releaseConnections() {
+        withContext(Dispatchers.IO) {
+            storeMutex.withLock {
+                cachedStore?.closeAllConnections()
             }
         }
     }
@@ -151,17 +176,34 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
         mode: OpenMode,
         block: (ImapFolder) -> T,
     ): T {
-        return withContext(Dispatchers.IO) {
-            val store = createStore(account)
-            var folder: ImapFolder? = null
+        return withStore(account) { store ->
+            val folder = store.getFolder(INBOX_FOLDER)
             try {
-                folder = store.getFolder(INBOX_FOLDER)
                 folder.open(mode)
                 block(folder)
             } finally {
-                folder?.close()
-                store.closeAllConnections()
+                folder.close()
             }
+        }
+    }
+
+    private suspend fun <T> withStore(account: Account, block: (ImapStore) -> T): T {
+        return withContext(Dispatchers.IO) {
+            storeMutex.withLock {
+                block(storeFor(account))
+            }
+        }
+    }
+
+    /** Must be called under [storeMutex]. Rebuilds the store when the account changes. */
+    private fun storeFor(account: Account): ImapStore {
+        cachedStore?.let { store ->
+            if (cachedAccount == account) return store
+            store.closeAllConnections()
+        }
+        return buildStore(account).also {
+            cachedAccount = account
+            cachedStore = it
         }
     }
 
@@ -171,7 +213,7 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
         } ?: "(unknown)"
     }
 
-    private fun createStore(account: Account): ImapStore {
+    private fun buildStore(account: Account): ImapStore {
         val settings = ServerSettings(
             type = "imap",
             host = account.host,

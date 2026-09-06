@@ -26,16 +26,24 @@ class WrenTrustedSocketFactory(keyStoreDirectory: File) : TrustedSocketFactory {
         LocalKeyStore { keyStoreDirectory.apply { mkdirs() } },
     )
 
+    // Keyed by host so distinct servers each get their own trust manager and
+    // context, but calls to the same server (the common case) reuse one
+    // SSLContext and get a shot at TLS session resumption instead of a fresh
+    // handshake state machine per socket.
+    private val contextsByHost = mutableMapOf<String, SSLContext>()
+
     override fun createSocket(
         socket: Socket?,
         host: String,
         port: Int,
         clientCertificateAlias: String?,
     ): Socket {
-        val trustManager = trustManagerFactory.getTrustManagerForDomain(host, port)
-        val factory = SSLContext.getInstance("TLS")
-            .apply { init(null, arrayOf(trustManager), null) }
-            .socketFactory
+        val factory = synchronized(contextsByHost) {
+            contextsByHost.getOrPut(host) {
+                val trustManager = trustManagerFactory.getTrustManagerForDomain(host, port)
+                SSLContext.getInstance("TLS").apply { init(null, arrayOf(trustManager), null) }
+            }
+        }.socketFactory
         val sslSocket = if (socket == null) {
             factory.createSocket()
         } else {

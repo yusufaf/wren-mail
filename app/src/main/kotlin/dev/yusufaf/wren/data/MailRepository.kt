@@ -30,6 +30,9 @@ class MailRepository(
     /** Throws MessagingException (or IOException) when settings are wrong. */
     suspend fun checkSettings(account: Account) = mailService.checkSettings(account)
 
+    /** Closes any pooled connection; called when the app backgrounds. */
+    suspend fun releaseConnections() = mailService.releaseConnections()
+
     /** Flushes pending ops, then replaces the cache with the live inbox. Throws on failure. */
     suspend fun refresh(account: Account) {
         flushPendingOps(account)

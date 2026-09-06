@@ -29,11 +29,19 @@ import dev.yusufaf.wren.ui.AccountSetupScreen
 import dev.yusufaf.wren.ui.InboxScreen
 import dev.yusufaf.wren.ui.InboxState
 import dev.yusufaf.wren.ui.MessageScreen
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 
 class MainActivity : ComponentActivity() {
+    // Not lifecycleScope: androidx.lifecycle:lifecycle-runtime-ktx isn't a
+    // dependency here. Cancelled in onDestroy.
+    private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = application as WrenApplication
@@ -43,6 +51,19 @@ class MainActivity : ComponentActivity() {
                 WrenApp(app.accountStore, app.repository)
             }
         }
+    }
+
+    // Backgrounded: drop the pooled IMAP connection rather than hold an idle
+    // socket open while the watch sleeps. The next call reconnects lazily.
+    override fun onStop() {
+        super.onStop()
+        val app = application as WrenApplication
+        activityScope.launch { app.repository.releaseConnections() }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        activityScope.cancel()
     }
 }
 
@@ -83,6 +104,14 @@ private data object SetupKey : NavKey
 @Serializable
 private data class MessageKey(val uid: String) : NavKey
 
+/**
+ * Below this age a return to the inbox renders the cache as-is rather than
+ * re-hitting the network — otherwise every triage pop (archive/delete/mark
+ * unread all leave the message screen) paid for a full sync on top of the
+ * 15-minute background one. Becomes a setting later; hardcoded for now.
+ */
+private const val INBOX_STALE_AFTER_MS = 2 * 60 * 1000L
+
 @Composable
 fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
     val backStack = rememberNavBackStack(InboxKey)
@@ -91,6 +120,7 @@ fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
     val envelopes by repository.inbox.collectAsState(initial = null)
     var refreshing by remember { mutableStateOf(false) }
     var refreshError by remember { mutableStateOf<String?>(null) }
+    var lastRefreshAt by remember { mutableStateOf(0L) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
@@ -103,14 +133,16 @@ fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
         }
     }
 
-    fun refreshInbox() {
+    fun refreshInbox(force: Boolean = true) {
         val current = account ?: return
         if (refreshing) return
+        if (!force && System.currentTimeMillis() - lastRefreshAt < INBOX_STALE_AFTER_MS) return
         refreshing = true
         refreshError = null
         scope.launch {
             try {
                 repository.refresh(current)
+                lastRefreshAt = System.currentTimeMillis()
             } catch (e: Exception) {
                 refreshError = e.message ?: e.toString()
             }
@@ -118,11 +150,17 @@ fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
         }
     }
 
-    // Covers first load (account arriving) and every return to the inbox —
-    // action-driven pops and swipe-dismiss alike. The cached list shows
-    // instantly either way; this only kicks off the network update.
+    // Refreshes on first load and whenever the account changes; a plain
+    // return to the inbox (a triage pop or swipe-dismiss) only refreshes if
+    // the cache has gone stale, since the cache already reflects the action
+    // that sent us back here.
+    val previousAccount = remember { mutableStateOf<Account?>(null) }
     LaunchedEffect(account, backStack.lastOrNull()) {
-        if (account != null && backStack.lastOrNull() is InboxKey) refreshInbox()
+        if (account != null && backStack.lastOrNull() is InboxKey) {
+            val accountChanged = previousAccount.value != account
+            previousAccount.value = account
+            refreshInbox(force = accountChanged)
+        }
     }
 
     AppScaffold(timeText = { TimeText() }) {
@@ -134,7 +172,7 @@ fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
                 entry<InboxKey> {
                     InboxScreen(
                         state = InboxState(envelopes, refreshing, refreshError),
-                        onRefresh = ::refreshInbox,
+                        onRefresh = { refreshInbox(force = true) },
                         onOpenSettings = { backStack.add(SetupKey) },
                         onOpenMessage = { uid -> backStack.add(MessageKey(uid)) },
                     )
