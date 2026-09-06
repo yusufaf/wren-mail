@@ -121,6 +121,9 @@ private data class MessageKey(val uid: String) : NavKey
  */
 private const val INBOX_STALE_AFTER_MS = 2 * 60 * 1000L
 
+/** How long a swiped Archive can still be undone from the inbox row. */
+private const val UNDO_WINDOW_MS = 5 * 1000L
+
 @Composable
 fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
     val backStack = rememberNavBackStack(InboxKey)
@@ -195,6 +198,25 @@ fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
                         onRefresh = { refreshInbox(force = true) },
                         onOpenSettings = { backStack.add(SetupKey) },
                         onOpenMessage = { uid -> backStack.add(MessageKey(uid)) },
+                        onArchive = { uid ->
+                            account?.let { current ->
+                                scope.launch { repository.archive(current, uid, UNDO_WINDOW_MS) }
+                            }
+                        },
+                        onUndoArchive = { uid -> repository.undoArchive(uid) },
+                        onDelete = { uid ->
+                            account?.let { current -> scope.launch { repository.delete(current, uid) } }
+                        },
+                        onSetFlagged = { uid, flagged ->
+                            account?.let { current ->
+                                scope.launch { repository.setFlagged(current, uid, flagged) }
+                            }
+                        },
+                        onSetUnread = { uid, unread ->
+                            account?.let { current ->
+                                scope.launch { repository.setUnread(current, uid, unread) }
+                            }
+                        },
                     )
                 }
                 entry<SetupKey> {

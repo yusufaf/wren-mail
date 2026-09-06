@@ -11,6 +11,8 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /** Cached inbox envelope; [position] preserves server order (newest first). */
@@ -28,7 +30,9 @@ data class CachedEnvelope(
 /**
  * A triage action waiting to reach the server. Applied optimistically to the
  * cache when created; removed once the IMAP operation succeeds. [value] is the
- * target state for the flag ops, unused for ARCHIVE/DELETE.
+ * target state for the flag ops, unused for ARCHIVE/DELETE. [notBeforeMs] holds
+ * an ARCHIVE op out of [PendingOpDao.due] until its undo window closes; zero
+ * for every other op type, meaning "due immediately".
  */
 @Entity(tableName = "pending_ops")
 data class PendingOp(
@@ -36,6 +40,7 @@ data class PendingOp(
     val uid: String,
     val type: String,
     val value: Boolean = false,
+    val notBeforeMs: Long = 0,
 ) {
     companion object {
         const val ARCHIVE = "archive"
@@ -74,24 +79,36 @@ interface InboxDao {
 
 @Dao
 interface PendingOpDao {
-    @Query("SELECT * FROM pending_ops ORDER BY id")
-    suspend fun all(): List<PendingOp>
+    /** Ops ready to send now — excludes an ARCHIVE still inside its undo window. */
+    @Query("SELECT * FROM pending_ops WHERE notBeforeMs <= :now ORDER BY id")
+    suspend fun due(now: Long): List<PendingOp>
 
     @Insert
     suspend fun insert(op: PendingOp)
 
     @Query("DELETE FROM pending_ops WHERE id = :id")
     suspend fun delete(id: Long)
+
+    @Query("DELETE FROM pending_ops WHERE uid = :uid")
+    suspend fun deleteByUid(uid: String)
 }
 
-@Database(entities = [CachedEnvelope::class, PendingOp::class], version = 1, exportSchema = false)
+private val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE pending_ops ADD COLUMN notBeforeMs INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+@Database(entities = [CachedEnvelope::class, PendingOp::class], version = 2, exportSchema = false)
 abstract class WrenDatabase : RoomDatabase() {
     abstract fun inboxDao(): InboxDao
     abstract fun pendingOpDao(): PendingOpDao
 
     companion object {
         fun create(context: Context): WrenDatabase {
-            return Room.databaseBuilder(context, WrenDatabase::class.java, "wren.db").build()
+            return Room.databaseBuilder(context, WrenDatabase::class.java, "wren.db")
+                .addMigrations(MIGRATION_1_2)
+                .build()
         }
     }
 }

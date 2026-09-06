@@ -36,6 +36,23 @@ data class MessageDetail(
 )
 
 /**
+ * The subset of [MailService] that [dev.yusufaf.wren.data.MailRepository] calls
+ * against a live server. Extracted so repository tests can fake the network
+ * without a real IMAP connection.
+ */
+interface MailOperations {
+    /** Throws MessagingException (or IOException) when settings are wrong. */
+    suspend fun checkSettings(account: Account)
+    suspend fun releaseConnections()
+    suspend fun fetchInbox(account: Account, limit: Int = 50): List<Envelope>
+    suspend fun fetchMessage(account: Account, uid: String): MessageDetail
+    suspend fun setUnread(account: Account, uid: String, unread: Boolean)
+    suspend fun setFlagged(account: Account, uid: String, flagged: Boolean)
+    suspend fun deleteMessage(account: Account, uid: String)
+    suspend fun archiveMessage(account: Account, uid: String)
+}
+
+/**
  * Thin IMAP facade over the vendored mail stack. Holds one [ImapStore] per
  * [Account], reused across calls so the underlying connection pool
  * ([com.fsck.k9.mail.store.imap.RealImapStore]) actually gets to pool
@@ -43,7 +60,7 @@ data class MessageDetail(
  * [storeMutex] serializes access so a UI call and [SyncWorker]'s refresh
  * can't race on the same store.
  */
-class MailService(private val socketFactory: TrustedSocketFactory) {
+class MailService(private val socketFactory: TrustedSocketFactory) : MailOperations {
 
     private val storeMutex = Mutex()
     private var cachedAccount: Account? = null
@@ -51,7 +68,7 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
     private var archiveFolderReady = false
 
     /** Throws MessagingException (or IOException) when settings are wrong. */
-    suspend fun checkSettings(account: Account) {
+    override suspend fun checkSettings(account: Account) {
         // Deliberately not cached: this validates credentials before they're
         // saved, so there is nothing yet to reuse the connection for.
         withContext(Dispatchers.IO) {
@@ -64,7 +81,9 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
         }
     }
 
-    suspend fun fetchInbox(account: Account, limit: Int = INBOX_WINDOW): List<Envelope> {
+    // No default here: an override can't redeclare one, it inherits
+    // MailOperations' default (50, matching INBOX_WINDOW below).
+    override suspend fun fetchInbox(account: Account, limit: Int): List<Envelope> {
         return withInbox(account, OpenMode.READ_ONLY) { folder ->
             val count = folder.messageCount
             if (count == 0) return@withInbox emptyList()
@@ -97,7 +116,7 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
      * BODY pulls the whole RFC822 message uncapped over the radio. Envelope,
      * flags and body are fetched in one round trip.
      */
-    suspend fun fetchMessage(account: Account, uid: String): MessageDetail {
+    override suspend fun fetchMessage(account: Account, uid: String): MessageDetail {
         return withInbox(account, OpenMode.READ_WRITE) { folder ->
             val message = folder.getMessage(uid)
             val profile = FetchProfile().apply {
@@ -124,15 +143,15 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
         }
     }
 
-    suspend fun setUnread(account: Account, uid: String, unread: Boolean) {
+    override suspend fun setUnread(account: Account, uid: String, unread: Boolean) {
         setFlag(account, uid, Flag.SEEN, value = !unread)
     }
 
-    suspend fun setFlagged(account: Account, uid: String, flagged: Boolean) {
+    override suspend fun setFlagged(account: Account, uid: String, flagged: Boolean) {
         setFlag(account, uid, Flag.FLAGGED, value = flagged)
     }
 
-    suspend fun deleteMessage(account: Account, uid: String) {
+    override suspend fun deleteMessage(account: Account, uid: String) {
         withInbox(account, OpenMode.READ_WRITE) { folder ->
             folder.deleteMessages(listOf(folder.getMessage(uid)))
         }
@@ -148,7 +167,7 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
      * rather than trusting a check that may now be stale (e.g. the folder
      * was removed server-side after we last confirmed it).
      */
-    suspend fun archiveMessage(account: Account, uid: String) {
+    override suspend fun archiveMessage(account: Account, uid: String) {
         withStore(account) { store ->
             val archive = store.getFolder(ARCHIVE_FOLDER)
             if (!archiveFolderReady) {
@@ -173,7 +192,7 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
      * an idle socket isn't held open while the app is backgrounded. The next
      * call transparently reconnects.
      */
-    suspend fun releaseConnections() {
+    override suspend fun releaseConnections() {
         withContext(Dispatchers.IO) {
             storeMutex.withLock {
                 cachedStore?.closeAllConnections()
