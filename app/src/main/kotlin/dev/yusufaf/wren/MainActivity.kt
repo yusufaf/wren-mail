@@ -31,10 +31,12 @@ import dev.yusufaf.wren.ui.InboxState
 import dev.yusufaf.wren.ui.MessageScreen
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 
 class MainActivity : ComponentActivity() {
@@ -55,10 +57,17 @@ class MainActivity : ComponentActivity() {
 
     // Backgrounded: drop the pooled IMAP connection rather than hold an idle
     // socket open while the watch sleeps. The next call reconnects lazily.
+    // NonCancellable: onDestroy can follow onStop immediately and cancels
+    // activityScope — without this, a release still waiting on the store's
+    // mutex would be cancelled before it ran, defeating the whole point.
     override fun onStop() {
         super.onStop()
         val app = application as WrenApplication
-        activityScope.launch { app.repository.releaseConnections() }
+        activityScope.launch {
+            withContext(NonCancellable) {
+                app.repository.releaseConnections()
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -136,7 +145,14 @@ fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
     fun refreshInbox(force: Boolean = true) {
         val current = account ?: return
         if (refreshing) return
-        if (!force && System.currentTimeMillis() - lastRefreshAt < INBOX_STALE_AFTER_MS) return
+        if (!force && System.currentTimeMillis() - lastRefreshAt < INBOX_STALE_AFTER_MS) {
+            // Cache is fresh enough to skip a full refetch, but a triage
+            // action taken while offline still has a PendingOp waiting —
+            // give it a chance to reach the server now, rather than making
+            // it wait for the next stale window or the 15-minute worker.
+            scope.launch { runCatching { repository.flushPendingOps(current) } }
+            return
+        }
         refreshing = true
         refreshError = null
         scope.launch {

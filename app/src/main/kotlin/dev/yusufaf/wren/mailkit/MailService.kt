@@ -143,7 +143,10 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
      * The exists()/create() probe touches its own connection and is only
      * worth paying for once per store lifetime — [archiveFolderReady] skips
      * it (and the connection it would otherwise leave sitting unused in the
-     * pool) on every archive after the first.
+     * pool) on every archive after the first. If the move itself fails,
+     * [archiveFolderReady] resets so the next attempt re-verifies the folder
+     * rather than trusting a check that may now be stale (e.g. the folder
+     * was removed server-side after we last confirmed it).
      */
     suspend fun archiveMessage(account: Account, uid: String) {
         withStore(account) { store ->
@@ -156,6 +159,9 @@ class MailService(private val socketFactory: TrustedSocketFactory) {
             try {
                 inbox.open(OpenMode.READ_WRITE)
                 inbox.moveMessages(listOf(inbox.getMessage(uid)), archive)
+            } catch (e: Exception) {
+                archiveFolderReady = false
+                throw e
             } finally {
                 inbox.close()
             }
