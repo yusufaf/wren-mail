@@ -5,6 +5,8 @@ kotlin = "2.4.10"
 androidxActivity = "1.13.0"
 androidxWearCompose = "1.6.2"
 androidxComposeUi = "1.9.4"
+androidxComposeMaterialIcons = "1.7.8"
+junit = "4.13.2"
 
 androidxAnnotation = "1.9.1"
 apacheHttpclient5 = "5.6.4"
@@ -34,6 +36,7 @@ ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivity" }
 androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview", version.ref = "androidxComposeUi" }
+androidx-compose-material-icons-core = { module = "androidx.compose.material:material-icons-core", version.ref = "androidxComposeMaterialIcons" }
 androidx-wear-compose-foundation = { module = "androidx.wear.compose:compose-foundation", version.ref = "androidxWearCompose" }
 androidx-wear-compose-material3 = { module = "androidx.wear.compose:compose-material3", version.ref = "androidxWearCompose" }
 
@@ -57,3 +60,5 @@ okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "androidxRoom" }
 androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "androidxRoom" }
 androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "androidxWork" }
+junit = { module = "junit:junit", version.ref = "junit" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
