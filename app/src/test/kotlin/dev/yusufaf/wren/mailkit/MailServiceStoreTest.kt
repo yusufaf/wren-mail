@@ -5,6 +5,7 @@ package dev.yusufaf.wren.mailkit
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
@@ -34,14 +35,14 @@ class MailServiceStoreTest {
         service.setFlagged(TEST_ACCOUNT, "2", flagged = true)
 
         assertEquals(1, factory.createCalls)
+        assertEquals(2, factory.stores.single().script(INBOX).setFlagsCalls.get())
     }
 
     @Test
     fun `two operations overlap instead of serializing on a warm store`() = runBlocking {
         val factory = RecordingStoreFactory()
         val service = MailService(FakeSocketFactory, factory)
-        // The first operation on a store runs alone (see the cold-store test);
-        // warm it up before arming the rendezvous.
+        // Warm the store with a first operation before arming the rendezvous.
         service.setFlagged(TEST_ACCOUNT, "0", flagged = true)
 
         // Both operations park here until the other arrives. Under a mutex
@@ -57,26 +58,24 @@ class MailServiceStoreTest {
 
         assertEquals(emptyList<Envelope>(), refresh.await())
         flag.await()
-
-        // Every operation shared one store: the lock around the lookup is what
-        // stops a concurrent first call from building two.
-        assertEquals(1, factory.createCalls)
     }
 
-    /** Review Focus 6. */
     @Test
-    fun `the first operation on a cold store runs alone`() = runBlocking {
+    fun `a cold store is warmed with a single probe before operations overlap`() = runBlocking {
         // RealImapStore writes its path-prefix state without synchronization
-        // while the first connection opens, so an overlapping second open can
-        // cache a stale combinedPrefix. onOpen reports how many opens are in
-        // flight; the sleep keeps each one in flight long enough to overlap.
-        val inFlight = AtomicInteger()
-        val peak = AtomicInteger()
+        // while the first connection opens, so the warm-up probe must finish
+        // before any operation opens a folder. onExists holds the probe open
+        // long enough for an unserialized open to land inside it.
+        val warming = AtomicBoolean()
+        val violations = AtomicInteger()
         val factory = RecordingStoreFactory { store ->
-            store.script(INBOX).onOpen = {
-                peak.accumulateAndGet(inFlight.incrementAndGet()) { a, b -> maxOf(a, b) }
+            store.script(INBOX).onExists = {
+                warming.set(true)
                 Thread.sleep(COLD_OVERLAP_WINDOW_MS)
-                inFlight.decrementAndGet()
+                warming.set(false)
+            }
+            store.script(INBOX).onOpen = {
+                if (warming.get()) violations.incrementAndGet()
             }
         }
         val service = MailService(FakeSocketFactory, factory)
@@ -86,11 +85,45 @@ class MailServiceStoreTest {
         first.await()
         second.await()
 
-        assertEquals(1, peak.get())
+        assertEquals(0, violations.get())
+        assertEquals(1, factory.stores.single().script(INBOX).existsCalls.get())
         assertEquals(1, factory.createCalls)
     }
 
-    /** Review Focus 3. */
+    @Test
+    fun `a rebuilt store is warmed again`() = runBlocking {
+        val factory = RecordingStoreFactory()
+        val service = MailService(FakeSocketFactory, factory)
+
+        service.setFlagged(TEST_ACCOUNT, "1", flagged = true)
+        service.setFlagged(OTHER_ACCOUNT, "2", flagged = true)
+
+        assertEquals(2, factory.createCalls)
+        assertEquals(1, factory.stores[0].script(INBOX).existsCalls.get())
+        assertEquals(1, factory.stores[1].script(INBOX).existsCalls.get())
+    }
+
+    @Test
+    fun `a failed warm-up leaves the store cold`() = runBlocking {
+        val failWarmUp = AtomicBoolean(true)
+        val factory = RecordingStoreFactory { store ->
+            store.script(INBOX).onExists = {
+                if (failWarmUp.get()) throw IllegalStateException("probe failed")
+            }
+        }
+        val service = MailService(FakeSocketFactory, factory)
+
+        val failure = runCatching { service.setFlagged(TEST_ACCOUNT, "1", flagged = true) }.exceptionOrNull()
+        assertTrue(failure is IllegalStateException)
+
+        failWarmUp.set(false)
+        service.setFlagged(TEST_ACCOUNT, "2", flagged = true)
+
+        val inbox = factory.stores.single().script(INBOX)
+        assertEquals(2, inbox.existsCalls.get())
+        assertEquals(1, inbox.setFlagsCalls.get())
+    }
+
     @Test
     fun `releasing connections mid-operation does not break the operation`() = runBlocking {
         val factory = RecordingStoreFactory()
@@ -125,7 +158,6 @@ class MailServiceStoreTest {
         assertEquals(2, store.script(INBOX).setFlagsCalls.get())
     }
 
-    /** Review Focus 4. */
     @Test
     fun `changing the account rebuilds the store and re-verifies the archive folder`() = runBlocking {
         val factory = RecordingStoreFactory()
@@ -141,7 +173,6 @@ class MailServiceStoreTest {
         assertEquals(1, factory.stores[1].script(ARCHIVE).existsCalls.get())
     }
 
-    /** Review Focus 5. */
     @Test
     fun `archive folder stays verified across operations on different threads`() = runBlocking {
         val factory = RecordingStoreFactory()

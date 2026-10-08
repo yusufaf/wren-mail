@@ -56,7 +56,6 @@ class MailServiceArchiveTest {
         assertEquals(2, store.script(ARCHIVE).existsCalls.get())
     }
 
-    /** Review Focus 1. */
     @Test
     fun `archive folder probe failure leaves the folder unverified`() = runBlocking {
         val factory = RecordingStoreFactory { store ->
@@ -80,7 +79,6 @@ class MailServiceArchiveTest {
         assertEquals(2, store.script(ARCHIVE).createCalls.get())
     }
 
-    /** Review Focus 2. */
     @Test
     fun `inbox is closed when the move fails`() = runBlocking {
         val factory = RecordingStoreFactory { store ->

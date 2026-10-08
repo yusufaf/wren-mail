@@ -20,11 +20,11 @@ following patches, each marked with a `Wren patch:` comment at the site:
 
 - `com/fsck/k9/mail/store/imap/RealImapStore.kt` — `permanentFlagsIndex` is a
   `ConcurrentHashMap.newKeySet()` rather than a `mutableSetOf()` (it is written
-  by `RealImapFolder` on every folder open), and `_combinedPrefix` is
-  `@Volatile`. Wren's `MailService` runs IMAP operations concurrently on one
-  store, which upstream's callers do not. `pathPrefix`, `pathDelimiter` and
-  `combinedPrefix` remain unsynchronized while the first connection opens;
-  `MailService` therefore runs the first successful operation on each store
-  alone.
+  by `RealImapFolder` on every folder open and during FETCH flag parsing), and
+  `_combinedPrefix` is `@Volatile`. Wren's `MailService` runs IMAP operations
+  concurrently on one store, which upstream's callers do not. `pathPrefix`,
+  `pathDelimiter` and `combinedPrefix` remain unsynchronized while the first
+  connection opens; `MailService` therefore warms each store with a single
+  INBOX probe, under its lock, before running operations concurrently.
 
 The vendored sources are otherwise unmodified from upstream.

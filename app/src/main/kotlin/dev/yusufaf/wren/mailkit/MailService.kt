@@ -60,9 +60,9 @@ interface MailOperations {
  * connections instead of paying a fresh TCP+TLS+LOGIN for every operation.
  *
  * [storeMutex] guards the cached store — the lookup, the rebuild when the
- * account changes, and [releaseConnections] — plus the first operation on each
- * store (see [withStore]). After that, operations run concurrently on the
- * store: a UI call and
+ * account changes, and [releaseConnections] — plus a single INBOX probe that
+ * warms each new store (see [withStore]). After that, operations run
+ * concurrently on the store: a UI call and
  * [dev.yusufaf.wren.sync.SyncWorker]'s refresh each take their own pooled
  * connection, which is the whole point of the pool. Shared mutable state
  * reachable from a store is therefore touched from several threads at once —
@@ -228,8 +228,11 @@ class MailService(
      *
      * This can now run while an operation is in flight. That operation's
      * connection has been polled out of the pool, so it isn't closed here;
-     * the generation bump means it is dropped rather than returned to the
-     * pool when the operation finishes.
+     * the generation bump means it is normally dropped rather than returned to
+     * the pool when the operation finishes. `RealImapStore.releaseConnection`
+     * checks the generation outside `synchronized(connections)`, so a stale
+     * connection can occasionally be pooled anyway; the next `getConnection`
+     * NOOPs it and discards it if it is dead.
      */
     override suspend fun releaseConnections() {
         withContext(Dispatchers.IO) {
@@ -263,29 +266,30 @@ class MailService(
 
     private suspend fun <T> withStore(account: Account, block: (ImapStore) -> T): T {
         return withContext(Dispatchers.IO) {
-            // The lock covers the cached-store lookup and rebuild, and nothing
-            // after the store is warm: serializing the round trip itself would
-            // defeat the connection pool, which should multiplex real network
-            // work. Until one operation has completed on the current store,
-            // that operation also runs under the lock, because RealImapStore
-            // writes its path-prefix state unsynchronized while the first
-            // connection opens and overlapping opens can cache a stale
-            // combinedPrefix. A failed first operation leaves the store cold,
-            // so the next one is serialized too.
-            storeMutex.lock()
-            var held = true
-            try {
-                val store = storeFor(account)
-                if (storeWarm) {
-                    storeMutex.unlock()
-                    held = false
-                    return@withContext block(store)
+            // The lock covers the cached-store lookup and rebuild, plus one
+            // INBOX probe on each cold store; the caller's block runs after
+            // the lock is released, because serializing the round trip itself
+            // would defeat the connection pool. The probe is the first
+            // connection open on the store, and RealImapStore writes its
+            // path-prefix state unsynchronized while that happens, so
+            // overlapping opens can cache a stale combinedPrefix. The probe
+            // returns its connection to the pool for the block to reuse. A
+            // failed probe throws and leaves the store cold, so the next call
+            // probes again.
+            val store = storeMutex.withLock {
+                storeFor(account).also {
+                    if (!storeWarm) {
+                        warmUp(it)
+                        storeWarm = true
+                    }
                 }
-                block(store).also { storeWarm = true }
-            } finally {
-                if (held) storeMutex.unlock()
             }
+            block(store)
         }
+    }
+
+    private fun warmUp(store: ImapStore) {
+        store.getFolder(INBOX_FOLDER).exists()
     }
 
     /** Must be called under [storeMutex]. Rebuilds the store when the account changes. */
