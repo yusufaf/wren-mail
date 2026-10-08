@@ -8,9 +8,11 @@ import com.fsck.k9.mail.store.imap.ImapClientInfo
 import com.fsck.k9.mail.store.imap.ImapFolder
 import com.fsck.k9.mail.store.imap.ImapStore
 import com.fsck.k9.mail.store.imap.ImapStoreConfig
+import com.fsck.k9.mail.store.imap.ImapStoreFactory
 import com.fsck.k9.mail.store.imap.OpenMode
 import dev.yusufaf.wren.account.Account
 import java.text.DateFormat
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -57,15 +59,42 @@ interface MailOperations {
  * [Account], reused across calls so the underlying connection pool
  * ([com.fsck.k9.mail.store.imap.RealImapStore]) actually gets to pool
  * connections instead of paying a fresh TCP+TLS+LOGIN for every operation.
- * [storeMutex] serializes access so a UI call and [SyncWorker]'s refresh
- * can't race on the same store.
+ *
+ * [storeMutex] guards the cached store — the lookup, the rebuild when the
+ * account changes, and [releaseConnections] — plus a single INBOX probe that
+ * warms each new store (see [withStore]). After that, operations run
+ * concurrently on the store: a UI call and
+ * [dev.yusufaf.wren.sync.SyncWorker]'s refresh each take their own pooled
+ * connection, which is the whole point of the pool. Shared mutable state
+ * reachable from a store is therefore touched from several threads at once —
+ * see the `Wren patch:` comments in `RealImapStore`.
  */
-class MailService(private val socketFactory: TrustedSocketFactory) : MailOperations {
+class MailService(
+    private val socketFactory: TrustedSocketFactory,
+    // ImapStore's companion object implements ImapStoreFactory, so the real
+    // store is the default and no production call site passes this. Tests
+    // substitute a fake store to exercise MailService without a server.
+    private val storeFactory: ImapStoreFactory = ImapStore,
+) : MailOperations {
 
     private val storeMutex = Mutex()
     private var cachedAccount: Account? = null
     private var cachedStore: ImapStore? = null
-    private var archiveFolderReady = false
+    // The store whose Archive folder has been confirmed to exist. Holding the
+    // store rather than a boolean ties the answer to one store identity: an
+    // archive still in flight on a replaced store can neither mark its
+    // successor verified nor, by failing, clear the successor's verification
+    // (see moveToArchive). Atomic because concurrent operations no longer
+    // share the storeMutex's happens-before edge. Two concurrent archives can
+    // both see a mismatch and both probe — unreachable through
+    // MailRepository, which flushes triage ops one at a time under its own
+    // lock, and self-healing via the pending-op queue if it ever happens.
+    private val archiveVerifiedStore = AtomicReference<ImapStore?>()
+
+    // The store that has completed its warm-up probe (see withStore). Guarded
+    // by storeMutex. Compared by identity, like archiveVerifiedStore, so a
+    // rebuilt store is cold without anything having to remember to reset it.
+    private var warmedStore: ImapStore? = null
 
     /** Throws MessagingException (or IOException) when settings are wrong. */
     override suspend fun checkSettings(account: Account) {
@@ -160,27 +189,21 @@ class MailService(private val socketFactory: TrustedSocketFactory) : MailOperati
     /**
      * Moves the message to the archive folder, creating the folder if needed.
      * The exists()/create() probe touches its own connection and is only
-     * worth paying for once per store lifetime — [archiveFolderReady] skips
+     * worth paying for once per store lifetime — [archiveVerifiedStore] skips
      * it (and the connection it would otherwise leave sitting unused in the
-     * pool) on every archive after the first. If the move itself fails,
-     * [archiveFolderReady] resets so the next attempt re-verifies the folder
-     * rather than trusting a check that may now be stale (e.g. the folder
-     * was removed server-side after we last confirmed it).
+     * pool) on every archive after the first.
      */
     override suspend fun archiveMessage(account: Account, uid: String) {
         withStore(account) { store ->
             val archive = store.getFolder(ARCHIVE_FOLDER)
-            if (!archiveFolderReady) {
+            if (archiveVerifiedStore.get() !== store) {
                 if (!archive.exists()) archive.create()
-                archiveFolderReady = true
+                archiveVerifiedStore.set(store)
             }
             val inbox = store.getFolder(INBOX_FOLDER)
             try {
                 inbox.open(OpenMode.READ_WRITE)
-                inbox.moveMessages(listOf(inbox.getMessage(uid)), archive)
-            } catch (e: Exception) {
-                archiveFolderReady = false
-                throw e
+                moveToArchive(store, inbox, uid, archive)
             } finally {
                 inbox.close()
             }
@@ -188,9 +211,37 @@ class MailService(private val socketFactory: TrustedSocketFactory) : MailOperati
     }
 
     /**
+     * The move is the only call in [archiveMessage] that names the archive
+     * folder, so it is the only failure that can mean our cached "the folder
+     * exists" answer has gone stale (e.g. a NO [TRYCREATE] because the folder
+     * was removed server-side). Clearing [archiveVerifiedStore] on an inbox
+     * open failure, or any other transient network error, only buys an extra
+     * exists()/create() round trip on the retry of a connection that is
+     * already struggling. The clear is conditional on [store] still being the
+     * verified one: a move that fails on a replaced store says nothing about
+     * its successor's archive folder.
+     */
+    private fun moveToArchive(store: ImapStore, inbox: ImapFolder, uid: String, archive: ImapFolder) {
+        try {
+            inbox.moveMessages(listOf(inbox.getMessage(uid)), archive)
+        } catch (e: Exception) {
+            archiveVerifiedStore.compareAndSet(store, null)
+            throw e
+        }
+    }
+
+    /**
      * Closes any pooled connection without discarding the cached store, so
      * an idle socket isn't held open while the app is backgrounded. The next
      * call transparently reconnects.
+     *
+     * This can now run while an operation is in flight. That operation's
+     * connection has been polled out of the pool, so it isn't closed here;
+     * the generation bump means it is normally dropped rather than returned to
+     * the pool when the operation finishes. `RealImapStore.releaseConnection`
+     * checks the generation outside `synchronized(connections)`, so a stale
+     * connection can occasionally be pooled anyway; the next `getConnection`
+     * NOOPs it and discards it if it is dead.
      */
     override suspend fun releaseConnections() {
         withContext(Dispatchers.IO) {
@@ -224,10 +275,30 @@ class MailService(private val socketFactory: TrustedSocketFactory) : MailOperati
 
     private suspend fun <T> withStore(account: Account, block: (ImapStore) -> T): T {
         return withContext(Dispatchers.IO) {
-            storeMutex.withLock {
-                block(storeFor(account))
+            // The lock covers the cached-store lookup and rebuild, plus one
+            // INBOX probe on each cold store; the caller's block runs after
+            // the lock is released, because serializing the round trip itself
+            // would defeat the connection pool. The probe is the first
+            // connection open on the store, and RealImapStore writes its
+            // path-prefix state unsynchronized while that happens, so
+            // overlapping opens can cache a stale combinedPrefix. The probe
+            // returns its connection to the pool for the block to reuse. A
+            // failed probe throws and leaves the store cold, so the next call
+            // probes again.
+            val store = storeMutex.withLock {
+                storeFor(account).also {
+                    if (warmedStore !== it) {
+                        warmUp(it)
+                        warmedStore = it
+                    }
+                }
             }
+            block(store)
         }
+    }
+
+    private fun warmUp(store: ImapStore) {
+        store.getFolder(INBOX_FOLDER).exists()
     }
 
     /** Must be called under [storeMutex]. Rebuilds the store when the account changes. */
@@ -236,7 +307,6 @@ class MailService(private val socketFactory: TrustedSocketFactory) : MailOperati
             if (cachedAccount == account) return store
             store.closeAllConnections()
         }
-        archiveFolderReady = false
         return buildStore(account).also {
             cachedAccount = account
             cachedStore = it
@@ -260,7 +330,7 @@ class MailService(private val socketFactory: TrustedSocketFactory) : MailOperati
             password = account.password,
             clientCertificateAlias = null,
         )
-        return ImapStore.create(settings, WrenImapConfig, socketFactory, oauthTokenProvider = null)
+        return storeFactory.create(settings, WrenImapConfig, socketFactory, oauthTokenProvider = null)
     }
 
     private object WrenImapConfig : ImapStoreConfig {
