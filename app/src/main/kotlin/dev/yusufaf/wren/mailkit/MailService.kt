@@ -169,10 +169,7 @@ class MailService(
      * The exists()/create() probe touches its own connection and is only
      * worth paying for once per store lifetime — [archiveFolderReady] skips
      * it (and the connection it would otherwise leave sitting unused in the
-     * pool) on every archive after the first. If the move itself fails,
-     * [archiveFolderReady] resets so the next attempt re-verifies the folder
-     * rather than trusting a check that may now be stale (e.g. the folder
-     * was removed server-side after we last confirmed it).
+     * pool) on every archive after the first.
      */
     override suspend fun archiveMessage(account: Account, uid: String) {
         withStore(account) { store ->
@@ -184,13 +181,28 @@ class MailService(
             val inbox = store.getFolder(INBOX_FOLDER)
             try {
                 inbox.open(OpenMode.READ_WRITE)
-                inbox.moveMessages(listOf(inbox.getMessage(uid)), archive)
-            } catch (e: Exception) {
-                archiveFolderReady = false
-                throw e
+                moveToArchive(inbox, uid, archive)
             } finally {
                 inbox.close()
             }
+        }
+    }
+
+    /**
+     * The move is the only call in [archiveMessage] that names the archive
+     * folder, so it is the only failure that can mean our cached "the folder
+     * exists" answer has gone stale (e.g. a NO [TRYCREATE] because the folder
+     * was removed server-side). Resetting [archiveFolderReady] on an inbox
+     * open failure, or any other transient network error, only buys an extra
+     * exists()/create() round trip on the retry of a connection that is
+     * already struggling.
+     */
+    private fun moveToArchive(inbox: ImapFolder, uid: String, archive: ImapFolder) {
+        try {
+            inbox.moveMessages(listOf(inbox.getMessage(uid)), archive)
+        } catch (e: Exception) {
+            archiveFolderReady = false
+            throw e
         }
     }
 
