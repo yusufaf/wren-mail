@@ -8,6 +8,7 @@ import com.fsck.k9.mail.store.imap.ImapClientInfo
 import com.fsck.k9.mail.store.imap.ImapFolder
 import com.fsck.k9.mail.store.imap.ImapStore
 import com.fsck.k9.mail.store.imap.ImapStoreConfig
+import com.fsck.k9.mail.store.imap.ImapStoreFactory
 import com.fsck.k9.mail.store.imap.OpenMode
 import dev.yusufaf.wren.account.Account
 import java.text.DateFormat
@@ -60,7 +61,13 @@ interface MailOperations {
  * [storeMutex] serializes access so a UI call and [SyncWorker]'s refresh
  * can't race on the same store.
  */
-class MailService(private val socketFactory: TrustedSocketFactory) : MailOperations {
+class MailService(
+    private val socketFactory: TrustedSocketFactory,
+    // ImapStore's companion object implements ImapStoreFactory, so the real
+    // store is the default and no production call site passes this. Tests
+    // substitute a fake store to exercise MailService without a server.
+    private val storeFactory: ImapStoreFactory = ImapStore,
+) : MailOperations {
 
     private val storeMutex = Mutex()
     private var cachedAccount: Account? = null
@@ -260,7 +267,7 @@ class MailService(private val socketFactory: TrustedSocketFactory) : MailOperati
             password = account.password,
             clientCertificateAlias = null,
         )
-        return ImapStore.create(settings, WrenImapConfig, socketFactory, oauthTokenProvider = null)
+        return storeFactory.create(settings, WrenImapConfig, socketFactory, oauthTokenProvider = null)
     }
 
     private object WrenImapConfig : ImapStoreConfig {
