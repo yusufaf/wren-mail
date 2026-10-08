@@ -42,9 +42,9 @@ internal open class RealImapStore(
 
     private var pathDelimiter: String? = null
 
-    // Wren patch: mutated by RealImapFolder.handlePermanentFlags on every
-    // folder open, from any thread once MailService allows concurrent
-    // operations. See mail/NOTICE.md.
+    // Wren patch: mutated by RealImapFolder.handlePermanentFlags and the
+    // $Forwarded flag parsing in RealImapFolder on every folder open, from any
+    // thread once MailService allows concurrent operations. See mail/NOTICE.md.
     private val permanentFlagsIndex: MutableSet<Flag> = ConcurrentHashMap.newKeySet()
     private val connections: Deque<ImapConnection> = LinkedList()
 
