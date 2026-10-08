@@ -1,10 +1,17 @@
 package dev.yusufaf.wren.mailkit
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import net.thunderbird.core.common.exception.MessagingException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+
+/** Generous: it only has to exceed scheduling jitter, never real I/O. */
+private const val MOVE_TIMEOUT_MS = 5_000L
 
 class MailServiceArchiveTest {
 
@@ -92,5 +99,39 @@ class MailServiceArchiveTest {
         )
 
         assertEquals(1, factory.stores.single().script(INBOX).closeCalls.get())
+    }
+
+    @Test
+    fun `move failure on a replaced store keeps the new store verified`() = runBlocking {
+        val factory = RecordingStoreFactory()
+        val service = MailService(FakeSocketFactory, factory)
+
+        service.archiveMessage(TEST_ACCOUNT, "1")
+        val oldStore = factory.stores.single()
+
+        val moveEntered = CountDownLatch(1)
+        val moveMayFail = CountDownLatch(1)
+        oldStore.script(INBOX).onMove = {
+            moveEntered.countDown()
+            check(moveMayFail.await(MOVE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) { "move was never released" }
+            throw MessagingException("connection reset")
+        }
+        val inFlight = async(Dispatchers.Default) {
+            runCatching { service.archiveMessage(TEST_ACCOUNT, "2") }.exceptionOrNull()
+        }
+        assertTrue(moveEntered.await(MOVE_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+
+        // The account changes while that archive is still in flight; the
+        // replacement store verifies its own archive folder.
+        service.archiveMessage(OTHER_ACCOUNT, "3")
+        val newStore = factory.stores[1]
+        assertEquals(1, newStore.script(ARCHIVE).existsCalls.get())
+
+        moveMayFail.countDown()
+        assertTrue(inFlight.await() is MessagingException)
+
+        // The old store's failure says nothing about the new store's folder.
+        service.archiveMessage(OTHER_ACCOUNT, "4")
+        assertEquals(1, newStore.script(ARCHIVE).existsCalls.get())
     }
 }

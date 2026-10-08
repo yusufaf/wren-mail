@@ -12,6 +12,7 @@ import com.fsck.k9.mail.store.imap.ImapStoreFactory
 import com.fsck.k9.mail.store.imap.OpenMode
 import dev.yusufaf.wren.account.Account
 import java.text.DateFormat
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -81,16 +82,19 @@ class MailService(
     private var cachedStore: ImapStore? = null
     // The store whose Archive folder has been confirmed to exist. Holding the
     // store rather than a boolean ties the answer to one store identity: an
-    // archive still in flight on a replaced store cannot mark its successor
-    // verified. Volatile because concurrent operations no longer share the
-    // storeMutex's happens-before edge: an archive on one IO thread has to be
-    // visible to the next archive on another. Two concurrent archives can both
-    // see a mismatch and both probe — unreachable through MailRepository,
-    // which flushes triage ops one at a time under its own lock, and
-    // self-healing via the pending-op queue if it ever happens.
-    @Volatile
-    private var archiveVerifiedStore: ImapStore? = null
-    private var storeWarm = false
+    // archive still in flight on a replaced store can neither mark its
+    // successor verified nor, by failing, clear the successor's verification
+    // (see moveToArchive). Atomic because concurrent operations no longer
+    // share the storeMutex's happens-before edge. Two concurrent archives can
+    // both see a mismatch and both probe — unreachable through
+    // MailRepository, which flushes triage ops one at a time under its own
+    // lock, and self-healing via the pending-op queue if it ever happens.
+    private val archiveVerifiedStore = AtomicReference<ImapStore?>()
+
+    // The store that has completed its warm-up probe (see withStore). Guarded
+    // by storeMutex. Compared by identity, like archiveVerifiedStore, so a
+    // rebuilt store is cold without anything having to remember to reset it.
+    private var warmedStore: ImapStore? = null
 
     /** Throws MessagingException (or IOException) when settings are wrong. */
     override suspend fun checkSettings(account: Account) {
@@ -192,14 +196,14 @@ class MailService(
     override suspend fun archiveMessage(account: Account, uid: String) {
         withStore(account) { store ->
             val archive = store.getFolder(ARCHIVE_FOLDER)
-            if (archiveVerifiedStore !== store) {
+            if (archiveVerifiedStore.get() !== store) {
                 if (!archive.exists()) archive.create()
-                archiveVerifiedStore = store
+                archiveVerifiedStore.set(store)
             }
             val inbox = store.getFolder(INBOX_FOLDER)
             try {
                 inbox.open(OpenMode.READ_WRITE)
-                moveToArchive(inbox, uid, archive)
+                moveToArchive(store, inbox, uid, archive)
             } finally {
                 inbox.close()
             }
@@ -213,13 +217,15 @@ class MailService(
      * was removed server-side). Clearing [archiveVerifiedStore] on an inbox
      * open failure, or any other transient network error, only buys an extra
      * exists()/create() round trip on the retry of a connection that is
-     * already struggling.
+     * already struggling. The clear is conditional on [store] still being the
+     * verified one: a move that fails on a replaced store says nothing about
+     * its successor's archive folder.
      */
-    private fun moveToArchive(inbox: ImapFolder, uid: String, archive: ImapFolder) {
+    private fun moveToArchive(store: ImapStore, inbox: ImapFolder, uid: String, archive: ImapFolder) {
         try {
             inbox.moveMessages(listOf(inbox.getMessage(uid)), archive)
         } catch (e: Exception) {
-            archiveVerifiedStore = null
+            archiveVerifiedStore.compareAndSet(store, null)
             throw e
         }
     }
@@ -281,9 +287,9 @@ class MailService(
             // probes again.
             val store = storeMutex.withLock {
                 storeFor(account).also {
-                    if (!storeWarm) {
+                    if (warmedStore !== it) {
                         warmUp(it)
-                        storeWarm = true
+                        warmedStore = it
                     }
                 }
             }
@@ -301,7 +307,6 @@ class MailService(
             if (cachedAccount == account) return store
             store.closeAllConnections()
         }
-        storeWarm = false
         return buildStore(account).also {
             cachedAccount = account
             cachedStore = it
