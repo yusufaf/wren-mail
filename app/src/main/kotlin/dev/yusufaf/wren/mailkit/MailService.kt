@@ -79,14 +79,17 @@ class MailService(
     private val storeMutex = Mutex()
     private var cachedAccount: Account? = null
     private var cachedStore: ImapStore? = null
-    // Volatile because concurrent operations no longer share the storeMutex's
-    // happens-before edge: an archive on one IO thread has to be visible to
-    // the next archive on another. Two concurrent archives can both see false
-    // and both probe — unreachable through MailRepository, which flushes
-    // triage ops one at a time under its own lock, and self-healing via the
-    // pending-op queue if it ever happens.
+    // The store whose Archive folder has been confirmed to exist. Holding the
+    // store rather than a boolean ties the answer to one store identity: an
+    // archive still in flight on a replaced store cannot mark its successor
+    // verified. Volatile because concurrent operations no longer share the
+    // storeMutex's happens-before edge: an archive on one IO thread has to be
+    // visible to the next archive on another. Two concurrent archives can both
+    // see a mismatch and both probe — unreachable through MailRepository,
+    // which flushes triage ops one at a time under its own lock, and
+    // self-healing via the pending-op queue if it ever happens.
     @Volatile
-    private var archiveFolderReady = false
+    private var archiveVerifiedStore: ImapStore? = null
     private var storeWarm = false
 
     /** Throws MessagingException (or IOException) when settings are wrong. */
@@ -182,16 +185,16 @@ class MailService(
     /**
      * Moves the message to the archive folder, creating the folder if needed.
      * The exists()/create() probe touches its own connection and is only
-     * worth paying for once per store lifetime — [archiveFolderReady] skips
+     * worth paying for once per store lifetime — [archiveVerifiedStore] skips
      * it (and the connection it would otherwise leave sitting unused in the
      * pool) on every archive after the first.
      */
     override suspend fun archiveMessage(account: Account, uid: String) {
         withStore(account) { store ->
             val archive = store.getFolder(ARCHIVE_FOLDER)
-            if (!archiveFolderReady) {
+            if (archiveVerifiedStore !== store) {
                 if (!archive.exists()) archive.create()
-                archiveFolderReady = true
+                archiveVerifiedStore = store
             }
             val inbox = store.getFolder(INBOX_FOLDER)
             try {
@@ -207,7 +210,7 @@ class MailService(
      * The move is the only call in [archiveMessage] that names the archive
      * folder, so it is the only failure that can mean our cached "the folder
      * exists" answer has gone stale (e.g. a NO [TRYCREATE] because the folder
-     * was removed server-side). Resetting [archiveFolderReady] on an inbox
+     * was removed server-side). Clearing [archiveVerifiedStore] on an inbox
      * open failure, or any other transient network error, only buys an extra
      * exists()/create() round trip on the retry of a connection that is
      * already struggling.
@@ -216,7 +219,7 @@ class MailService(
         try {
             inbox.moveMessages(listOf(inbox.getMessage(uid)), archive)
         } catch (e: Exception) {
-            archiveFolderReady = false
+            archiveVerifiedStore = null
             throw e
         }
     }
@@ -298,7 +301,6 @@ class MailService(
             if (cachedAccount == account) return store
             store.closeAllConnections()
         }
-        archiveFolderReady = false
         storeWarm = false
         return buildStore(account).also {
             cachedAccount = account
