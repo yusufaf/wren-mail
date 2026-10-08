@@ -33,8 +33,8 @@ internal open class RealImapStore(
 
     private var pathPrefix: String?
 
-    // Wren patch: read through the combinedPrefix getter on any thread once
-    // MailService allows concurrent operations. See mail/NOTICE.md.
+    // Wren patch: read through the combinedPrefix getter from any thread, since
+    // MailService runs operations concurrently. See mail/NOTICE.md.
     @Volatile
     private var _combinedPrefix: String? = null
     override val combinedPrefix: String?
@@ -42,9 +42,9 @@ internal open class RealImapStore(
 
     private var pathDelimiter: String? = null
 
-    // Wren patch: mutated by RealImapFolder.handlePermanentFlags and the
-    // $Forwarded flag parsing in RealImapFolder on every folder open, from any
-    // thread once MailService allows concurrent operations. See mail/NOTICE.md.
+    // Wren patch: written from any thread by RealImapFolder.handlePermanentFlags
+    // on folder open and by $Forwarded flag parsing in handleFetchResponse.
+    // See mail/NOTICE.md.
     private val permanentFlagsIndex: MutableSet<Flag> = ConcurrentHashMap.newKeySet()
     private val connections: Deque<ImapConnection> = LinkedList()
 
