@@ -58,8 +58,15 @@ interface MailOperations {
  * [Account], reused across calls so the underlying connection pool
  * ([com.fsck.k9.mail.store.imap.RealImapStore]) actually gets to pool
  * connections instead of paying a fresh TCP+TLS+LOGIN for every operation.
- * [storeMutex] serializes access so a UI call and [SyncWorker]'s refresh
- * can't race on the same store.
+ *
+ * [storeMutex] guards the cached store — the lookup, the rebuild when the
+ * account changes, and [releaseConnections] — plus the first operation on each
+ * store (see [withStore]). After that, operations run concurrently on the
+ * store: a UI call and
+ * [dev.yusufaf.wren.sync.SyncWorker]'s refresh each take their own pooled
+ * connection, which is the whole point of the pool. Shared mutable state
+ * reachable from a store is therefore touched from several threads at once —
+ * see the `Wren patch:` comments in `RealImapStore`.
  */
 class MailService(
     private val socketFactory: TrustedSocketFactory,
@@ -72,7 +79,15 @@ class MailService(
     private val storeMutex = Mutex()
     private var cachedAccount: Account? = null
     private var cachedStore: ImapStore? = null
+    // Volatile because concurrent operations no longer share the storeMutex's
+    // happens-before edge: an archive on one IO thread has to be visible to
+    // the next archive on another. Two concurrent archives can both see false
+    // and both probe — unreachable through MailRepository, which flushes
+    // triage ops one at a time under its own lock, and self-healing via the
+    // pending-op queue if it ever happens.
+    @Volatile
     private var archiveFolderReady = false
+    private var storeWarm = false
 
     /** Throws MessagingException (or IOException) when settings are wrong. */
     override suspend fun checkSettings(account: Account) {
@@ -210,6 +225,11 @@ class MailService(
      * Closes any pooled connection without discarding the cached store, so
      * an idle socket isn't held open while the app is backgrounded. The next
      * call transparently reconnects.
+     *
+     * This can now run while an operation is in flight. That operation's
+     * connection has been polled out of the pool, so it isn't closed here;
+     * the generation bump means it is dropped rather than returned to the
+     * pool when the operation finishes.
      */
     override suspend fun releaseConnections() {
         withContext(Dispatchers.IO) {
@@ -243,8 +263,27 @@ class MailService(
 
     private suspend fun <T> withStore(account: Account, block: (ImapStore) -> T): T {
         return withContext(Dispatchers.IO) {
-            storeMutex.withLock {
-                block(storeFor(account))
+            // The lock covers the cached-store lookup and rebuild, and nothing
+            // after the store is warm: serializing the round trip itself would
+            // defeat the connection pool, which should multiplex real network
+            // work. Until one operation has completed on the current store,
+            // that operation also runs under the lock, because RealImapStore
+            // writes its path-prefix state unsynchronized while the first
+            // connection opens and overlapping opens can cache a stale
+            // combinedPrefix. A failed first operation leaves the store cold,
+            // so the next one is serialized too.
+            storeMutex.lock()
+            var held = true
+            try {
+                val store = storeFor(account)
+                if (storeWarm) {
+                    storeMutex.unlock()
+                    held = false
+                    return@withContext block(store)
+                }
+                block(store).also { storeWarm = true }
+            } finally {
+                if (held) storeMutex.unlock()
             }
         }
     }
@@ -256,6 +295,7 @@ class MailService(
             store.closeAllConnections()
         }
         archiveFolderReady = false
+        storeWarm = false
         return buildStore(account).also {
             cachedAccount = account
             cachedStore = it
