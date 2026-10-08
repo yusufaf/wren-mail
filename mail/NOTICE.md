@@ -15,5 +15,13 @@ This project is not affiliated with or endorsed by MZLA Technologies
 Corporation or the Mozilla Foundation. "Thunderbird" is a trademark of the
 Mozilla Foundation; it is used here only to credit the origin of the code.
 
-Local modifications are limited to the compatibility shims noted above; the
-vendored sources are otherwise unmodified from upstream.
+Local modifications are limited to the compatibility shims noted above and the
+following patches, each marked with a `Wren patch:` comment at the site:
+
+- `com/fsck/k9/mail/store/imap/RealImapStore.kt` — `permanentFlagsIndex` is a
+  `ConcurrentHashMap.newKeySet()` rather than a `mutableSetOf()`, and
+  `_combinedPrefix` is `@Volatile`. Both are written by `RealImapFolder` on
+  every folder open; Wren's `MailService` runs IMAP operations concurrently on
+  one store, which upstream's callers do not.
+
+The vendored sources are otherwise unmodified from upstream.

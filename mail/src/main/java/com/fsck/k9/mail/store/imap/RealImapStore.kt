@@ -14,6 +14,7 @@ import com.fsck.k9.mail.store.imap.ImapStoreSettings.pathPrefix
 import java.io.IOException
 import java.util.Deque
 import java.util.LinkedList
+import java.util.concurrent.ConcurrentHashMap
 import net.thunderbird.core.common.exception.MessagingException
 import net.thunderbird.core.common.mail.Flag
 import net.thunderbird.legacy.logging.Log
@@ -32,13 +33,19 @@ internal open class RealImapStore(
 
     private var pathPrefix: String?
 
+    // Wren patch: read through the combinedPrefix getter on any thread once
+    // MailService allows concurrent operations. See mail/NOTICE.md.
+    @Volatile
     private var _combinedPrefix: String? = null
     override val combinedPrefix: String?
         get() = _combinedPrefix ?: buildCombinedPrefix().also { _combinedPrefix = it }
 
     private var pathDelimiter: String? = null
 
-    private val permanentFlagsIndex: MutableSet<Flag> = mutableSetOf()
+    // Wren patch: mutated by RealImapFolder.handlePermanentFlags on every
+    // folder open, from any thread once MailService allows concurrent
+    // operations. See mail/NOTICE.md.
+    private val permanentFlagsIndex: MutableSet<Flag> = ConcurrentHashMap.newKeySet()
     private val connections: Deque<ImapConnection> = LinkedList()
 
     @Volatile
