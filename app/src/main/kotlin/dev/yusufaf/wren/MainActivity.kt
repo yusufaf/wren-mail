@@ -25,10 +25,14 @@ import com.fsck.k9.mail.ConnectionSecurity
 import dev.yusufaf.wren.account.Account
 import dev.yusufaf.wren.account.AccountStore
 import dev.yusufaf.wren.data.MailRepository
+import dev.yusufaf.wren.mailkit.ConnectionFailure
+import dev.yusufaf.wren.mailkit.TrustExceptions
+import dev.yusufaf.wren.mailkit.toConnectionFailure
 import dev.yusufaf.wren.ui.AccountSetupScreen
 import dev.yusufaf.wren.ui.InboxScreen
 import dev.yusufaf.wren.ui.InboxState
 import dev.yusufaf.wren.ui.MessageScreen
+import dev.yusufaf.wren.ui.TrustedCertificatesScreen
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -50,7 +54,7 @@ class MainActivity : ComponentActivity() {
         seedAccountFromIntentForDebug(app.accountStore, intent)
         setContent {
             MaterialTheme {
-                WrenApp(app.accountStore, app.repository)
+                WrenApp(app.accountStore, app.repository, app.trustExceptions)
             }
         }
     }
@@ -113,6 +117,9 @@ private data object SetupKey : NavKey
 @Serializable
 private data class MessageKey(val uid: String) : NavKey
 
+@Serializable
+private data object TrustedCertificatesKey : NavKey
+
 /**
  * Below this age a return to the inbox renders the cache as-is rather than
  * re-hitting the network — otherwise every triage pop (archive/delete/mark
@@ -125,13 +132,18 @@ private const val INBOX_STALE_AFTER_MS = 2 * 60 * 1000L
 private const val UNDO_WINDOW_MS = 5 * 1000L
 
 @Composable
-fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
+fun WrenApp(accountStore: AccountStore, repository: MailRepository, trustExceptions: TrustExceptions) {
     val backStack = rememberNavBackStack(InboxKey)
     var account by remember { mutableStateOf<Account?>(null) }
     var accountLoaded by remember { mutableStateOf(false) }
     val envelopes by repository.inbox.collectAsState(initial = null)
     var refreshing by remember { mutableStateOf(false) }
     var refreshError by remember { mutableStateOf<String?>(null) }
+    // Set alongside refreshError when the failure was an untrusted certificate
+    // the user can review. Plain remember: a certificate can't go in a Bundle.
+    var untrustedCertificate by remember {
+        mutableStateOf<ConnectionFailure.UntrustedCertificate?>(null)
+    }
     var lastRefreshAt by remember { mutableStateOf(0L) }
     val scope = rememberCoroutineScope()
 
@@ -157,17 +169,21 @@ fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
             // enough to skip a refetch while still showing a stale error
             // banner from an earlier failed refresh would be self-contradictory.
             refreshError = null
+            untrustedCertificate = null
             scope.launch { runCatching { repository.flushPendingOps(current) } }
             return
         }
         refreshing = true
         refreshError = null
+        untrustedCertificate = null
         scope.launch {
             try {
                 repository.refresh(current)
                 lastRefreshAt = System.currentTimeMillis()
             } catch (e: Exception) {
-                refreshError = e.message ?: e.toString()
+                val failure = e.toConnectionFailure(current)
+                refreshError = failure.message
+                untrustedCertificate = failure as? ConnectionFailure.UntrustedCertificate
             }
             refreshing = false
         }
@@ -194,7 +210,7 @@ fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
             entryProvider = entryProvider {
                 entry<InboxKey> {
                     InboxScreen(
-                        state = InboxState(envelopes, refreshing, refreshError),
+                        state = InboxState(envelopes, refreshing, refreshError, untrustedCertificate),
                         onRefresh = { refreshInbox(force = true) },
                         onOpenSettings = { backStack.add(SetupKey) },
                         onOpenMessage = { uid -> backStack.add(MessageKey(uid)) },
@@ -217,6 +233,17 @@ fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
                                 scope.launch { repository.setUnread(current, uid, unread) }
                             }
                         },
+                        onTrustCertificate = { failure ->
+                            scope.launch {
+                                try {
+                                    trustExceptions.accept(failure.host, failure.port, failure.certificate)
+                                    untrustedCertificate = null
+                                    refreshInbox(force = true)
+                                } catch (e: Exception) {
+                                    refreshError = "Couldn't save certificate: ${e.message ?: e}"
+                                }
+                            }
+                        },
                     )
                 }
                 entry<SetupKey> {
@@ -228,11 +255,23 @@ fun WrenApp(accountStore: AccountStore, repository: MailRepository) {
                                 accountStore.save(candidate)
                                 null
                             } catch (e: Exception) {
-                                e.message ?: e.toString()
+                                e.toConnectionFailure(candidate)
                             }
                         },
+                        onTrustCertificate = { failure ->
+                            try {
+                                trustExceptions.accept(failure.host, failure.port, failure.certificate)
+                                null
+                            } catch (e: Exception) {
+                                "Couldn't save certificate: ${e.message ?: e}"
+                            }
+                        },
+                        onOpenTrustedCertificates = { backStack.add(TrustedCertificatesKey) },
                         onSaved = { backStack.removeLastOrNull() },
                     )
+                }
+                entry<TrustedCertificatesKey> {
+                    TrustedCertificatesScreen(trustExceptions)
                 }
                 entry<MessageKey> { key ->
                     val current = account

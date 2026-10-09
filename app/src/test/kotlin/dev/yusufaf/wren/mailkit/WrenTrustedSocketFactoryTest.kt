@@ -3,8 +3,6 @@ package dev.yusufaf.wren.mailkit
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.security.KeyStore
-import java.security.cert.X509Certificate
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLException
@@ -13,6 +11,7 @@ import javax.net.ssl.SSLSocket
 import kotlin.concurrent.thread
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Rule
 import org.junit.Test
@@ -21,26 +20,13 @@ import org.junit.rules.TemporaryFolder
 /** Generous: it only has to exceed scheduling jitter, never real I/O. */
 private const val SOCKET_TIMEOUT_MS = 5_000
 
-/**
- * Password of tls/localhost-self-signed.p12, a 100-year self-signed EC cert.
- * Regenerate with: keytool -genkeypair -alias server -keyalg EC -groupname
- * secp256r1 -sigalg SHA256withECDSA -dname CN=localhost
- * -ext SAN=dns:localhost,ip:127.0.0.1 -validity 36500 -storetype PKCS12
- * -keystore localhost-self-signed.p12 -storepass changeit -keypass changeit
- */
-private const val FIXTURE_PASSWORD = "changeit"
-
 class WrenTrustedSocketFactoryTest {
 
     @get:Rule
     val tmp = TemporaryFolder()
 
-    private val fixture = KeyStore.getInstance("PKCS12").apply {
-        WrenTrustedSocketFactoryTest::class.java.getResourceAsStream("/tls/localhost-self-signed.p12")!!.use {
-            load(it, FIXTURE_PASSWORD.toCharArray())
-        }
-    }
-    private val serverCert = fixture.getCertificate("server") as X509Certificate
+    private val fixture = TlsFixture.keyStore
+    private val serverCert = TlsFixture.certificate
 
     private var server: SSLServerSocket? = null
 
@@ -77,6 +63,58 @@ class WrenTrustedSocketFactoryTest {
         assertThrows(SSLException::class.java) { handshake(factory, port) }
     }
 
+    @Test
+    fun `revoking with a differently-cased host is not bypassed by a resumed session`() {
+        val factory = WrenTrustedSocketFactory(tmp.newFolder("ssl"))
+        val port = startServer()
+        factory.addTrustException("LOCALHOST", port, serverCert)
+
+        val first = handshake(factory, port, host = "LOCALHOST")
+        val second = handshake(factory, port, host = "LOCALHOST")
+        assertArrayEquals("second handshake must resume the first session", first, second)
+
+        factory.removeTrustException("localhost", port)
+
+        assertThrows(SSLException::class.java) { handshake(factory, port, host = "LOCALHOST") }
+    }
+
+    @Test
+    fun `trust exceptions are listed until removed`() {
+        val factory = WrenTrustedSocketFactory(tmp.newFolder("ssl"))
+        factory.addTrustException("localhost", 993, serverCert)
+        factory.addTrustException("localhost", 995, serverCert)
+
+        assertEquals(
+            setOf(
+                TrustException("localhost", 993, serverCert),
+                TrustException("localhost", 995, serverCert),
+            ),
+            factory.trustExceptions().toSet(),
+        )
+
+        factory.removeTrustException("localhost", 993)
+
+        assertEquals(listOf(TrustException("localhost", 995, serverCert)), factory.trustExceptions())
+    }
+
+    @Test
+    fun `trust exceptions survive a restart`() {
+        val directory = tmp.newFolder("ssl")
+        WrenTrustedSocketFactory(directory).addTrustException("localhost", 993, serverCert)
+
+        val restarted = WrenTrustedSocketFactory(directory)
+
+        assertEquals(listOf(TrustException("localhost", 993, serverCert)), restarted.trustExceptions())
+    }
+
+    @Test
+    fun `an IPv6 host is listed intact`() {
+        val factory = WrenTrustedSocketFactory(tmp.newFolder("ssl"))
+        factory.addTrustException("::1", 993, serverCert)
+
+        assertEquals(listOf(TrustException("::1", 993, serverCert)), factory.trustExceptions())
+    }
+
     /**
      * Pinned to TLSv1.2 so resumption goes through session IDs, without
      * depending on when a TLSv1.3 NewSessionTicket gets read.
@@ -84,7 +122,7 @@ class WrenTrustedSocketFactoryTest {
     private fun startServer(): Int {
         val serverContext = SSLContext.getInstance("TLS").apply {
             val keyManagers = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
-                .apply { init(fixture, FIXTURE_PASSWORD.toCharArray()) }
+                .apply { init(fixture, TlsFixture.PASSWORD.toCharArray()) }
             init(keyManagers.keyManagers, null, null)
         }
         val server = (serverContext.serverSocketFactory.createServerSocket(
@@ -115,8 +153,8 @@ class WrenTrustedSocketFactoryTest {
     }
 
     /** Returns the TLS session id, so callers can tell a resumed session from a new one. */
-    private fun handshake(factory: WrenTrustedSocketFactory, port: Int): ByteArray =
-        factory.createSocket(null, "localhost", port, null).use {
+    private fun handshake(factory: WrenTrustedSocketFactory, port: Int, host: String = "localhost"): ByteArray =
+        factory.createSocket(null, host, port, null).use {
             it.soTimeout = SOCKET_TIMEOUT_MS
             it.connect(InetSocketAddress("localhost", port), SOCKET_TIMEOUT_MS)
             (it as SSLSocket).startHandshake()

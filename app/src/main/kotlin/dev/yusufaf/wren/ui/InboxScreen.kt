@@ -46,6 +46,7 @@ import androidx.wear.compose.material3.lazy.TransformationSpec
 import androidx.wear.compose.material3.lazy.rememberTransformationSpec
 import androidx.wear.compose.material3.lazy.transformedHeight
 import androidx.wear.compose.material3.rememberRevealState
+import dev.yusufaf.wren.mailkit.ConnectionFailure
 import dev.yusufaf.wren.mailkit.Envelope
 import kotlinx.coroutines.launch
 
@@ -58,6 +59,8 @@ data class InboxState(
     val envelopes: List<Envelope>?,
     val refreshing: Boolean,
     val error: String?,
+    /** Set when [error] came from an untrusted server certificate the user can review. */
+    val untrustedCertificate: ConnectionFailure.UntrustedCertificate? = null,
 )
 
 @Composable
@@ -71,10 +74,12 @@ fun InboxScreen(
     onDelete: (String) -> Unit,
     onSetFlagged: (String, Boolean) -> Unit,
     onSetUnread: (String, Boolean) -> Unit,
+    onTrustCertificate: (ConnectionFailure.UntrustedCertificate) -> Unit,
 ) {
     val listState = rememberTransformingLazyColumnState()
     val transformationSpec = rememberTransformationSpec()
     var actionsFor by remember { mutableStateOf<Envelope?>(null) }
+    var reviewingCertificate by remember { mutableStateOf(false) }
 
     ScreenScaffold(scrollState = listState) { contentPadding ->
         TransformingLazyColumn(
@@ -127,6 +132,9 @@ fun InboxScreen(
                 }
             }
             if (envelopes != null && !state.refreshing) {
+                if (state.untrustedCertificate != null) {
+                    item { ActionRow("Review certificate", transformationSpec) { reviewingCertificate = true } }
+                }
                 item { ActionRow(if (state.error != null) "Retry" else "Refresh", transformationSpec, onRefresh) }
             }
             item {
@@ -143,6 +151,15 @@ fun InboxScreen(
         onDelete = { onDelete(it.uid) },
         onSetFlagged = onSetFlagged,
         onSetUnread = onSetUnread,
+    )
+
+    CertificateTrustDialog(
+        failure = state.untrustedCertificate.takeIf { reviewingCertificate },
+        onTrust = { failure ->
+            reviewingCertificate = false
+            onTrustCertificate(failure)
+        },
+        onDismiss = { reviewingCertificate = false },
     )
 }
 

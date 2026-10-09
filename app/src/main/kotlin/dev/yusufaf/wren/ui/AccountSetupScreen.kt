@@ -9,6 +9,7 @@ import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -30,6 +31,7 @@ import androidx.wear.compose.material3.lazy.rememberTransformationSpec
 import androidx.wear.compose.material3.lazy.transformedHeight
 import com.fsck.k9.mail.ConnectionSecurity
 import dev.yusufaf.wren.account.Account
+import dev.yusufaf.wren.mailkit.ConnectionFailure
 import kotlinx.coroutines.launch
 
 /**
@@ -39,7 +41,9 @@ import kotlinx.coroutines.launch
 @Composable
 fun AccountSetupScreen(
     initial: Account?,
-    onValidateAndSave: suspend (Account) -> String?,
+    onValidateAndSave: suspend (Account) -> ConnectionFailure?,
+    onTrustCertificate: suspend (ConnectionFailure.UntrustedCertificate) -> String?,
+    onOpenTrustedCertificates: () -> Unit,
     onSaved: () -> Unit,
 ) {
     val listState = rememberTransformingLazyColumnState()
@@ -55,6 +59,9 @@ fun AccountSetupScreen(
     var password by rememberSaveable { mutableStateOf(initial?.password ?: "") }
     var checking by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
+    // Plain remember: an X509Certificate can't go in a Bundle, and losing an
+    // open prompt on process death is fine, since the next Save raises it again.
+    var untrusted by remember { mutableStateOf<ConnectionFailure.UntrustedCertificate?>(null) }
 
     val hostInput = rememberTextInputLauncher("Server") { host = it.trim() }
     val portInput = rememberTextInputLauncher("Port") { text ->
@@ -65,19 +72,27 @@ fun AccountSetupScreen(
 
     val candidate = Account(host, port, security, username, password)
 
+    fun validateAndSave() {
+        checking = true
+        error = null
+        scope.launch {
+            val failure = onValidateAndSave(candidate)
+            checking = false
+            when (failure) {
+                null -> onSaved()
+                is ConnectionFailure.UntrustedCertificate -> untrusted = failure
+                is ConnectionFailure.Other -> error = failure.message
+            }
+        }
+    }
+
     ScreenScaffold(
         scrollState = listState,
         edgeButton = {
             EdgeButton(
                 onClick = {
                     if (checking || !candidate.isComplete) return@EdgeButton
-                    checking = true
-                    error = null
-                    scope.launch {
-                        val failure = onValidateAndSave(candidate)
-                        checking = false
-                        if (failure == null) onSaved() else error = failure
-                    }
+                    validateAndSave()
                 },
                 enabled = candidate.isComplete && !checking,
                 modifier = Modifier.scrollable(
@@ -156,8 +171,32 @@ fun AccountSetupScreen(
                     onClick = passwordInput,
                 )
             }
+            item {
+                SettingRow("Trusted certificates", "Manage", transformationSpec, onOpenTrustedCertificates)
+            }
         }
     }
+
+    CertificateTrustDialog(
+        failure = untrusted,
+        onTrust = { failure ->
+            untrusted = null
+            checking = true
+            scope.launch {
+                val saveError = onTrustCertificate(failure)
+                if (saveError == null) {
+                    validateAndSave()
+                } else {
+                    checking = false
+                    error = saveError
+                }
+            }
+        },
+        onDismiss = {
+            untrusted = null
+            error = ConnectionFailure.UntrustedCertificate.MESSAGE
+        },
+    )
 }
 
 @Composable

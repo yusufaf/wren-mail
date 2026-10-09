@@ -11,12 +11,16 @@ import javax.net.ssl.SNIHostName
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 
+/** A certificate the user chose to trust for [host]:[port] despite failed validation. */
+data class TrustException(val host: String, val port: Int, val certificate: X509Certificate)
+
 /**
  * TLS sockets built on the vendored mail-stack trust plumbing:
  * [TrustManagerFactory] validates the chain against the system store AND
  * verifies the hostname against the certificate ([LocalKeyStore] is its
  * fallback for certificates the user explicitly accepted). Exceptions must go
- * through [addTrustException] / [removeTrustException]: this factory's
+ * through [addTrustException] / [removeTrustException] (and be read with
+ * [trustExceptions]): this factory's
  * [LocalKeyStore] loads its file once, so a second [LocalKeyStore] on the same
  * directory would go unseen.
  *
@@ -42,6 +46,12 @@ class WrenTrustedSocketFactory(keyStoreDirectory: File) : TrustedSocketFactory {
     // working.
     private val contextsByHostPort = mutableMapOf<Pair<String, Int>, SSLContext>()
 
+    /** The exceptions currently in effect, as the trust manager sees them. */
+    fun trustExceptions(): List<TrustException> =
+        localKeyStore.getCertificates().map { (key, certificate) ->
+            TrustException(key.first, key.second, certificate)
+        }
+
     /**
      * Trusts [certificate] for [host]:[port]. The trust change and the cache
      * eviction take effect even if persisting the keystore fails; that can
@@ -54,25 +64,36 @@ class WrenTrustedSocketFactory(keyStoreDirectory: File) : TrustedSocketFactory {
             try {
                 localKeyStore.addCertificate(host, port, certificate)
             } finally {
-                contextsByHostPort.remove(host to port)
+                evict(host, port)
             }
         }
     }
 
     /**
      * Revokes the exception for [host]:[port]. Connections that are already
-     * open or pooled are unaffected; the caller closes them. The revocation
-     * and the cache eviction take effect even if persisting the keystore
-     * fails — a write failure is only logged, so the certificate would be
-     * trusted again after a restart.
+     * open or pooled are unaffected; `TrustExceptions.revoke` resets them. The
+     * revocation and the cache eviction take effect even if persisting the
+     * keystore fails: a write error is only logged, so the certificate would
+     * be trusted again after a restart, and a failure to open the keystore
+     * file escapes as an [java.io.IOException].
      */
     fun removeTrustException(host: String, port: Int) {
         synchronized(contextsByHostPort) {
             try {
                 localKeyStore.deleteCertificate(host, port)
             } finally {
-                contextsByHostPort.remove(host to port)
+                evict(host, port)
             }
+        }
+    }
+
+    // Case-insensitive on the host: the default JDK keystore lowercases
+    // aliases, so an exception can be stored under a different case than the
+    // one the connection used, and a missed eviction would let a resumed
+    // session bypass a revoke.
+    private fun evict(host: String, port: Int) {
+        contextsByHostPort.keys.removeAll { (cachedHost, cachedPort) ->
+            cachedPort == port && cachedHost.equals(host, ignoreCase = true)
         }
     }
 
