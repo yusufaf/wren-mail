@@ -26,5 +26,8 @@ following patches, each marked with a `Wren patch:` comment at the site:
   `pathDelimiter` and `combinedPrefix` remain unsynchronized while the first
   connection opens; `MailService` therefore warms each store with a single
   INBOX probe, under its lock, before running operations concurrently.
+- `com/fsck/k9/mail/ssl/LocalKeyStore.kt` — `getCertificates()` added, a
+  read-only enumeration of the stored trust exceptions for Wren's
+  trusted-certificates screen. Upstream has no listing API.
 
 The vendored sources are otherwise unmodified from upstream.

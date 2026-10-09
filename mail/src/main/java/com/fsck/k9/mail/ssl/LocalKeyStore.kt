@@ -148,6 +148,33 @@ class LocalKeyStore(private val directoryProvider: KeyStoreDirectoryProvider) {
         }
     }
 
+    // Wren patch: read-only listing for Wren's trusted-certificates screen;
+    // upstream has no way to enumerate the stored exceptions. Reads the
+    // in-memory store rather than the file so it agrees with
+    // isValidCertificate, including entries whose write failed. The default
+    // JDK keystore type lowercases aliases, so the host may differ in case from
+    // what was passed to addCertificate.
+    @Synchronized
+    fun getCertificates(): Map<Pair<String, Int>, X509Certificate> {
+        val keyStore = this.keyStore ?: return emptyMap()
+
+        return try {
+            buildMap {
+                for (alias in keyStore.aliases()) {
+                    // The port follows the last colon; an IPv6 host contains colons itself.
+                    val separator = alias.lastIndexOf(':')
+                    if (separator <= 0) continue
+                    val port = alias.substring(separator + 1).toIntOrNull() ?: continue
+                    val certificate = keyStore.getCertificate(alias) as? X509Certificate ?: continue
+                    put(alias.substring(0, separator) to port, certificate)
+                }
+            }
+        } catch (e: KeyStoreException) {
+            Log.w(e, "Error reading from KeyStore")
+            emptyMap()
+        }
+    }
+
     private fun getKeyStoreFile(version: Int): File {
         return if (version < 1) {
             File(keyStoreDirectory, "KeyStore.bks")
