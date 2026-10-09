@@ -27,6 +27,7 @@ import androidx.wear.compose.material3.lazy.transformedHeight
 import dev.yusufaf.wren.account.Account
 import dev.yusufaf.wren.data.MailRepository
 import dev.yusufaf.wren.mailkit.MessageDetail
+import dev.yusufaf.wren.mailkit.toConnectionFailure
 import kotlinx.coroutines.launch
 
 private sealed interface MessageState {
@@ -60,7 +61,7 @@ fun MessageScreen(
         state = try {
             MessageState.Ready(repository.fetchMessage(account, uid))
         } catch (e: Exception) {
-            MessageState.Failed(e.message ?: e.toString())
+            MessageState.Failed(e.toConnectionFailure(account).message)
         }
     }
 
@@ -73,7 +74,7 @@ fun MessageScreen(
                 action()
                 if (leaveAfter) onDone() else busy = false
             } catch (e: Exception) {
-                actionError = e.message ?: e.toString()
+                actionError = e.toConnectionFailure(account).message
                 busy = false
             }
         }
