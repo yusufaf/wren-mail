@@ -159,6 +159,58 @@ class MailServiceStoreTest {
     }
 
     @Test
+    fun `resetting connections closes the pool and rebuilds the store on next use`() = runBlocking {
+        val factory = RecordingStoreFactory()
+        val service = MailService(FakeSocketFactory, factory)
+        service.setFlagged(TEST_ACCOUNT, "0", flagged = true)
+
+        service.resetConnections()
+        service.setFlagged(TEST_ACCOUNT, "1", flagged = true)
+
+        assertEquals(2, factory.createCalls)
+        assertEquals(1, factory.stores[0].closeAllConnectionsCalls.get())
+        // The rebuilt store is cold, so it gets its own warm-up probe.
+        assertEquals(1, factory.stores[1].script(INBOX).existsCalls.get())
+    }
+
+    @Test
+    fun `resetting before any operation is a no-op`() = runBlocking {
+        val factory = RecordingStoreFactory()
+        val service = MailService(FakeSocketFactory, factory)
+
+        service.resetConnections()
+
+        assertEquals(0, factory.createCalls)
+    }
+
+    @Test
+    fun `an operation in flight during a reset still completes`() = runBlocking {
+        val factory = RecordingStoreFactory()
+        val service = MailService(FakeSocketFactory, factory)
+        service.setFlagged(TEST_ACCOUNT, "0", flagged = true)
+
+        val operationEntered = CountDownLatch(1)
+        val connectionsReset = CountDownLatch(1)
+        factory.stores.single().script(INBOX).onOpen = {
+            operationEntered.countDown()
+            check(connectionsReset.await(RENDEZVOUS_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                "resetConnections() was blocked behind the in-flight operation"
+            }
+        }
+
+        val flag = async(Dispatchers.Default) { service.setFlagged(TEST_ACCOUNT, "1", flagged = true) }
+        assertTrue(operationEntered.await(RENDEZVOUS_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+
+        service.resetConnections()
+        connectionsReset.countDown()
+        flag.await()
+
+        assertEquals(1, factory.stores.single().closeAllConnectionsCalls.get())
+        service.setFlagged(TEST_ACCOUNT, "2", flagged = true)
+        assertEquals(2, factory.createCalls)
+    }
+
+    @Test
     fun `changing the account rebuilds the store and re-verifies the archive folder`() = runBlocking {
         val factory = RecordingStoreFactory()
         val service = MailService(FakeSocketFactory, factory)

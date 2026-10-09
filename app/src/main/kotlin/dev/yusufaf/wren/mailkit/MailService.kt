@@ -251,6 +251,29 @@ class MailService(
         }
     }
 
+    /**
+     * Closes the pool like [releaseConnections], and also discards the cached
+     * store. A connection an in-flight operation returns after the close then
+     * lands in a store nobody uses again, so the re-pooling race described on
+     * [releaseConnections] can't hand it out. Every later operation builds a
+     * fresh store whose connections handshake against the current trust state.
+     * Called when a trust exception is revoked; an orphaned connection lingers
+     * only until the server's idle timeout.
+     *
+     * `archiveVerifiedStore` is left alone: it is compared by identity, so the
+     * discarded store's entry can't match its successor.
+     */
+    suspend fun resetConnections() {
+        withContext(Dispatchers.IO) {
+            storeMutex.withLock {
+                cachedStore?.closeAllConnections()
+                cachedStore = null
+                cachedAccount = null
+                warmedStore = null
+            }
+        }
+    }
+
     private suspend fun setFlag(account: Account, uid: String, flag: Flag, value: Boolean) {
         withInbox(account, OpenMode.READ_WRITE) { folder ->
             folder.setFlags(listOf(folder.getMessage(uid)), setOf(flag), value)
