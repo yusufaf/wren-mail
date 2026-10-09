@@ -32,16 +32,20 @@ class TrustExceptions(
      * The reset runs in `finally` because a persist failure (an
      * [java.io.IOException] from opening the keystore file) is thrown only
      * after the in-memory revoke took effect; the pool must still be dropped,
-     * and the exception still reaches the caller. It is non-cancellable
-     * because the caller's scope (the screen) can be cancelled mid-revoke, and
-     * the reset may be queued behind a cold store's warm-up on the store
-     * mutex; a cancelled reset would leave pre-revoke connections pooled.
+     * and the exception still reaches the caller. The whole revoke is
+     * non-cancellable because the caller's scope (the screen) can be
+     * cancelled at any point, even before the removal starts, and the reset
+     * may be queued behind a cold store's warm-up on the store mutex. A
+     * cancelled revoke would leave the exception trusted or pre-revoke
+     * connections pooled while the user believes the certificate is gone.
      */
     suspend fun revoke(host: String, port: Int) {
-        try {
-            withContext(Dispatchers.IO) { socketFactory.removeTrustException(host, port) }
-        } finally {
-            withContext(NonCancellable) { mailService.resetConnections() }
+        withContext(NonCancellable) {
+            try {
+                withContext(Dispatchers.IO) { socketFactory.removeTrustException(host, port) }
+            } finally {
+                mailService.resetConnections()
+            }
         }
     }
 }

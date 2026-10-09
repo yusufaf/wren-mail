@@ -6,7 +6,9 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -102,6 +104,23 @@ class TrustExceptionsTest {
         assertNotNull(failure)
         assertEquals(1, setup.storeFactory.stores[0].closeAllConnectionsCalls.get())
         assertTrue(setup.trustExceptions.list().isEmpty())
+    }
+
+    @Test
+    fun `a revoke cancelled before it starts still removes the exception and resets connections`() = runBlocking {
+        val setup = trustExceptions()
+        setup.trustExceptions.accept("localhost", 993, certificate)
+        setup.service.setFlagged(TEST_ACCOUNT, "1", flagged = true)
+
+        // The screen's scope is already cancelled when revoke is entered, e.g.
+        // the user swiped back right after tapping Revoke.
+        launch(Dispatchers.Default) {
+            currentCoroutineContext().job.cancel()
+            setup.trustExceptions.revoke("localhost", 993)
+        }.join()
+
+        assertTrue(setup.socketFactory.trustExceptions().isEmpty())
+        assertEquals(1, setup.storeFactory.stores[0].closeAllConnectionsCalls.get())
     }
 
     @Test
