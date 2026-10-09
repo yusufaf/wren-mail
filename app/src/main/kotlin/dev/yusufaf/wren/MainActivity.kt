@@ -32,6 +32,7 @@ import dev.yusufaf.wren.ui.AccountSetupScreen
 import dev.yusufaf.wren.ui.InboxScreen
 import dev.yusufaf.wren.ui.InboxState
 import dev.yusufaf.wren.ui.MessageScreen
+import dev.yusufaf.wren.ui.TrustedCertificatesScreen
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -115,6 +116,9 @@ private data object SetupKey : NavKey
 
 @Serializable
 private data class MessageKey(val uid: String) : NavKey
+
+@Serializable
+private data object TrustedCertificatesKey : NavKey
 
 /**
  * Below this age a return to the inbox renders the cache as-is rather than
@@ -262,8 +266,12 @@ fun WrenApp(accountStore: AccountStore, repository: MailRepository, trustExcepti
                                 "Couldn't save certificate: ${e.message ?: e}"
                             }
                         },
+                        onOpenTrustedCertificates = { backStack.add(TrustedCertificatesKey) },
                         onSaved = { backStack.removeLastOrNull() },
                     )
+                }
+                entry<TrustedCertificatesKey> {
+                    TrustedCertificatesScreen(trustExceptions)
                 }
                 entry<MessageKey> { key ->
                     val current = account

@@ -43,6 +43,7 @@ fun AccountSetupScreen(
     initial: Account?,
     onValidateAndSave: suspend (Account) -> ConnectionFailure?,
     onTrustCertificate: suspend (ConnectionFailure.UntrustedCertificate) -> String?,
+    onOpenTrustedCertificates: () -> Unit,
     onSaved: () -> Unit,
 ) {
     val listState = rememberTransformingLazyColumnState()
@@ -169,6 +170,9 @@ fun AccountSetupScreen(
                     transformationSpec = transformationSpec,
                     onClick = passwordInput,
                 )
+            }
+            item {
+                SettingRow("Trusted certificates", "Manage", transformationSpec, onOpenTrustedCertificates)
             }
         }
     }
