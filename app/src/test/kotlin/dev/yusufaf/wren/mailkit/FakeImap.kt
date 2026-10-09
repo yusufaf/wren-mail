@@ -202,8 +202,12 @@ internal class FakeImapStore : ImapStore {
     /** New instance per call, exactly like `RealImapStore.getFolder`. */
     override fun getFolder(name: String): ImapFolder = FakeImapFolder(script(name))
 
+    @Volatile
+    var onCloseAllConnections: () -> Unit = {}
+
     override fun closeAllConnections() {
         closeAllConnectionsCalls.incrementAndGet()
+        onCloseAllConnections()
     }
 
     override val combinedPrefix: String? = null

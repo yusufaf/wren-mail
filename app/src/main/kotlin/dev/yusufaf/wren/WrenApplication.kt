@@ -6,6 +6,7 @@ import dev.yusufaf.wren.account.AccountStore
 import dev.yusufaf.wren.data.MailRepository
 import dev.yusufaf.wren.data.WrenDatabase
 import dev.yusufaf.wren.mailkit.MailService
+import dev.yusufaf.wren.mailkit.TrustExceptions
 import dev.yusufaf.wren.mailkit.WrenTrustedSocketFactory
 import dev.yusufaf.wren.sync.SyncWorker
 import java.io.File
@@ -23,12 +24,19 @@ class WrenApplication : Application() {
     // the inbox.
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    // One factory and one service, shared, so trust changes and connection
+    // resets reach the live pool.
+    private val socketFactory by lazy { WrenTrustedSocketFactory(File(filesDir, "ssl-keystore")) }
+    private val mailService by lazy { MailService(socketFactory) }
+
+    val trustExceptions by lazy { TrustExceptions(socketFactory, mailService) }
+
     val repository by lazy {
         val db = WrenDatabase.create(this)
         MailRepository(
             db.inboxDao(),
             db.pendingOpDao(),
-            MailService(WrenTrustedSocketFactory(File(filesDir, "ssl-keystore"))),
+            mailService,
             applicationScope,
         )
     }
