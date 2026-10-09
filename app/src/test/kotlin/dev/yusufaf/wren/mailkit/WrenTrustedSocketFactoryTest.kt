@@ -21,6 +21,13 @@ import org.junit.rules.TemporaryFolder
 /** Generous: it only has to exceed scheduling jitter, never real I/O. */
 private const val SOCKET_TIMEOUT_MS = 5_000
 
+/**
+ * Password of tls/localhost-self-signed.p12, a 100-year self-signed EC cert.
+ * Regenerate with: keytool -genkeypair -alias server -keyalg EC -groupname
+ * secp256r1 -sigalg SHA256withECDSA -dname CN=localhost
+ * -ext SAN=dns:localhost,ip:127.0.0.1 -validity 36500 -storetype PKCS12
+ * -keystore localhost-self-signed.p12 -storepass changeit -keypass changeit
+ */
 private const val FIXTURE_PASSWORD = "changeit"
 
 class WrenTrustedSocketFactoryTest {
