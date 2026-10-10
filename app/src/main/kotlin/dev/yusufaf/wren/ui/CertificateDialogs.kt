@@ -88,6 +88,18 @@ fun CertificateTrustDialog(
     }
 }
 
+internal const val TRUST_CONFIRM_DELAY_MILLIS = 1_000L
+
+internal enum class TrustTap { TRUST, CONFIRM, IGNORE }
+
+/** What a tap on the trust button does, given when the mismatch warning was first shown (if it has been). */
+internal fun trustTap(mismatch: Boolean, confirmingSince: Long?, now: Long): TrustTap = when {
+    !mismatch -> TrustTap.TRUST
+    confirmingSince == null -> TrustTap.CONFIRM
+    now - confirmingSince < TRUST_CONFIRM_DELAY_MILLIS -> TrustTap.IGNORE
+    else -> TrustTap.TRUST
+}
+
 internal fun ScalingLazyListScope.certificateDetails(info: CertificateInfo) {
     val dates = DateFormat.getDateInstance(DateFormat.MEDIUM)
     item { DetailText("Subject", info.subject) }
