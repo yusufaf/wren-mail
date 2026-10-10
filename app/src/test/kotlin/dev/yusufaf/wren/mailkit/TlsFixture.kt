@@ -40,8 +40,30 @@ internal object TlsFixture {
      * -ext "SAN=dns:localhost,ip:127.0.0.1" -validity 36500
      * -keystore ca.p12 -storepass changeit
      */
-    val caIssuedCertificate: X509Certificate =
-        TlsFixture::class.java.getResourceAsStream("/tls/localhost-ca-issued.pem")!!.use {
+    val caIssuedCertificate: X509Certificate = pemCertificate("localhost-ca-issued.pem")
+
+    /**
+     * tls/localhost-cn-only.pem, a 100-year self-signed cert for CN=localhost
+     * with no subject alternative name extension, like old home-server certs.
+     * The key is not kept. Regenerate with:
+     * keytool -genkeypair -alias server -keyalg EC -groupname secp256r1
+     * -sigalg SHA256withECDSA -dname CN=localhost -validity 36500
+     * -storetype PKCS12 -keystore cn.p12 -storepass changeit -keypass changeit
+     * keytool -exportcert -alias server -keystore cn.p12 -storepass changeit
+     * -rfc -file localhost-cn-only.pem
+     */
+    val cnOnlyCertificate: X509Certificate = pemCertificate("localhost-cn-only.pem")
+
+    /**
+     * tls/ip-cn-only.pem, like [cnOnlyCertificate] but with CN=127.0.0.1.
+     * Regenerate with the same commands, using -dname CN=127.0.0.1, a new
+     * keystore (-keystore ip.p12, so the first alias isn't reused) and
+     * -file ip-cn-only.pem.
+     */
+    val ipCnOnlyCertificate: X509Certificate = pemCertificate("ip-cn-only.pem")
+
+    private fun pemCertificate(name: String): X509Certificate =
+        TlsFixture::class.java.getResourceAsStream("/tls/$name")!!.use {
             CertificateFactory.getInstance("X.509").generateCertificate(it) as X509Certificate
         }
 }
