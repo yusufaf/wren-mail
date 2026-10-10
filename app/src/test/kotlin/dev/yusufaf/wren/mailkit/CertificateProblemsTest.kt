@@ -8,11 +8,14 @@ import dev.yusufaf.wren.mailkit.CertificateProblem.UNTRUSTED_ISSUER
 import java.security.cert.X509Certificate
 import java.util.Date
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class CertificateProblemsTest {
     private val certificate = TlsFixture.certificate
     private val caIssued = TlsFixture.caIssuedCertificate
+    private val cnOnly = TlsFixture.cnOnlyCertificate
+    private val ipCnOnly = TlsFixture.ipCnOnlyCertificate
 
     // Each fixture is checked inside its own validity window: the CA-issued
     // one is generated later than the p12 and keytool doesn't backdate.
@@ -33,6 +36,39 @@ class CertificateProblemsTest {
         assertEquals(
             listOf(HOSTNAME_MISMATCH, SELF_SIGNED),
             certificate.problemsFor("mail.example.com", certificate.validAt),
+        )
+    }
+
+    @Test
+    fun `the fixtures without subject alternative names really have none`() {
+        assertNull(cnOnly.subjectAlternativeNames)
+        assertNull(ipCnOnly.subjectAlternativeNames)
+    }
+
+    @Test
+    fun `a certificate with no alternative names matches the host by its common name`() {
+        assertEquals(listOf(SELF_SIGNED), cnOnly.problemsFor("localhost", cnOnly.validAt))
+    }
+
+    @Test
+    fun `the common name is matched case-insensitively`() {
+        assertEquals(listOf(SELF_SIGNED), cnOnly.problemsFor("LOCALHOST", cnOnly.validAt))
+    }
+
+    @Test
+    fun `a common name for another host is a hostname mismatch`() {
+        assertEquals(
+            listOf(HOSTNAME_MISMATCH, SELF_SIGNED),
+            cnOnly.problemsFor("mail.example.com", cnOnly.validAt),
+        )
+    }
+
+    @Test
+    fun `an IP host is never matched against the common name`() {
+        // The verifier only checks IP names for an IP host (RFC 2818), same as the trust manager.
+        assertEquals(
+            listOf(HOSTNAME_MISMATCH, SELF_SIGNED),
+            ipCnOnly.problemsFor("127.0.0.1", ipCnOnly.validAt),
         )
     }
 

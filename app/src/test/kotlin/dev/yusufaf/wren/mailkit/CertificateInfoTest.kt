@@ -22,4 +22,12 @@ class CertificateInfoTest {
         assertEquals(certificate.notAfter, info.validUntil)
         assertEquals(listOf("localhost", "127.0.0.1"), info.names)
     }
+
+    @Test
+    fun `a certificate with no alternative names has no names`() {
+        val info = TlsFixture.cnOnlyCertificate.toCertificateInfo()
+
+        assertEquals("CN=localhost", info.subject)
+        assertEquals(emptyList<String>(), info.names)
+    }
 }
