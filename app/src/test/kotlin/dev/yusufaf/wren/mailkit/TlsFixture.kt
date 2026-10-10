@@ -56,7 +56,8 @@ internal object TlsFixture {
 
     /**
      * tls/ip-cn-only.pem, like [cnOnlyCertificate] but with CN=127.0.0.1.
-     * Regenerate with the same commands, using -dname CN=127.0.0.1 and
+     * Regenerate with the same commands, using -dname CN=127.0.0.1, a new
+     * keystore (-keystore ip.p12, so the first alias isn't reused) and
      * -file ip-cn-only.pem.
      */
     val ipCnOnlyCertificate: X509Certificate = pemCertificate("ip-cn-only.pem")
