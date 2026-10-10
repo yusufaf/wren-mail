@@ -1,11 +1,13 @@
 package dev.yusufaf.wren.ui
 
+import android.os.SystemClock
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -24,13 +26,15 @@ import dev.yusufaf.wren.mailkit.ConnectionFailure
 import dev.yusufaf.wren.mailkit.problems
 import dev.yusufaf.wren.mailkit.toCertificateInfo
 import java.text.DateFormat
+import kotlinx.coroutines.delay
 
 /**
  * The prompt shown when a server's certificate failed validation. Trusting is
  * a security decision, so the buttons are labelled rather than icon-only and
  * the reasons it failed, then the certificate's identity, are shown above them.
- * A hostname mismatch needs a second tap because it is the one failure that
- * can mean interception.
+ * A hostname mismatch needs a second tap, accepted only after the warning has
+ * been shown for [TRUST_CONFIRM_DELAY_MILLIS], because it is the one failure
+ * that can mean interception; a fast double tap must not trust it.
  */
 @Composable
 fun CertificateTrustDialog(
@@ -41,7 +45,16 @@ fun CertificateTrustDialog(
     val info = remember(failure?.certificate) { failure?.certificate?.toCertificateInfo() }
     val problems = remember(failure) { failure?.problems().orEmpty() }
     val mismatch = CertificateProblem.HOSTNAME_MISMATCH in problems
-    var confirming by remember(failure) { mutableStateOf(false) }
+    var confirmingSince by remember(failure) { mutableStateOf<Long?>(null) }
+    var armed by remember(failure) { mutableStateOf(false) }
+    val confirming = confirmingSince != null
+    // Only drives the button's look; trustTap's timestamp check is what actually gates the tap.
+    LaunchedEffect(confirmingSince) {
+        if (confirmingSince != null) {
+            delay(TRUST_CONFIRM_DELAY_MILLIS)
+            armed = true
+        }
+    }
     AlertDialog(
         visible = failure != null,
         onDismissRequest = onDismiss,
@@ -63,7 +76,15 @@ fun CertificateTrustDialog(
                 }
                 FilledTonalButton(
                     modifier = Modifier.fillMaxWidth(),
-                    onClick = { if (mismatch && !confirming) confirming = true else onTrust(current) },
+                    enabled = !(mismatch && confirming && !armed),
+                    onClick = {
+                        val now = SystemClock.uptimeMillis()
+                        when (trustTap(mismatch, confirmingSince, now)) {
+                            TrustTap.CONFIRM -> confirmingSince = now
+                            TrustTap.IGNORE -> Unit
+                            TrustTap.TRUST -> onTrust(current)
+                        }
+                    },
                     icon = { Icon(Icons.Outlined.Lock, contentDescription = null) },
                     label = {
                         Text(
@@ -86,6 +107,18 @@ fun CertificateTrustDialog(
             )
         }
     }
+}
+
+internal const val TRUST_CONFIRM_DELAY_MILLIS = 1_000L
+
+internal enum class TrustTap { TRUST, CONFIRM, IGNORE }
+
+/** What a tap on the trust button does, given when the mismatch warning was first shown (if it has been). */
+internal fun trustTap(mismatch: Boolean, confirmingSince: Long?, now: Long): TrustTap = when {
+    !mismatch -> TrustTap.TRUST
+    confirmingSince == null -> TrustTap.CONFIRM
+    now - confirmingSince < TRUST_CONFIRM_DELAY_MILLIS -> TrustTap.IGNORE
+    else -> TrustTap.TRUST
 }
 
 internal fun ScalingLazyListScope.certificateDetails(info: CertificateInfo) {
