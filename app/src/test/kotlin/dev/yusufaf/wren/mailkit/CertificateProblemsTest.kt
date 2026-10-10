@@ -16,6 +16,8 @@ class CertificateProblemsTest {
     private val caIssued = TlsFixture.caIssuedCertificate
     private val cnOnly = TlsFixture.cnOnlyCertificate
     private val ipCnOnly = TlsFixture.ipCnOnlyCertificate
+    private val otherSan = TlsFixture.otherSanCertificate
+    private val ipSanOnly = TlsFixture.ipSanOnlyCertificate
 
     // Each fixture is checked inside its own validity window: the CA-issued
     // one is generated later than the p12 and keytool doesn't backdate.
@@ -70,6 +72,28 @@ class CertificateProblemsTest {
             listOf(HOSTNAME_MISMATCH, SELF_SIGNED),
             ipCnOnly.problemsFor("127.0.0.1", ipCnOnly.validAt),
         )
+    }
+
+    @Test
+    fun `the fixtures with alternative names have only the expected ones`() {
+        assertEquals(listOf(listOf(2, "other.example")), otherSan.subjectAlternativeNames.toList())
+        assertEquals(listOf(listOf(7, "127.0.0.1")), ipSanOnly.subjectAlternativeNames.toList())
+    }
+
+    @Test
+    fun `a DNS alternative name takes precedence over a matching common name`() {
+        // RFC 6125 6.4.4 / RFC 2818 3.1: the CN is ignored once a DNS SAN is present.
+        assertEquals(
+            listOf(HOSTNAME_MISMATCH, SELF_SIGNED),
+            otherSan.problemsFor("localhost", otherSan.validAt),
+        )
+    }
+
+    @Test
+    fun `the common name is still used when the only alternative names are IP addresses`() {
+        // RFC 2818 only rules out the CN when a dNSName SAN is present, and
+        // DefaultHostnameVerifier falls back to the CN when there are no DNS-type SANs.
+        assertEquals(listOf(SELF_SIGNED), ipSanOnly.problemsFor("localhost", ipSanOnly.validAt))
     }
 
     @Test
