@@ -1,6 +1,7 @@
 package dev.yusufaf.wren.mailkit
 
 import java.security.MessageDigest
+import java.security.cert.CertificateParsingException
 import java.security.cert.X509Certificate
 import java.util.Date
 import javax.security.auth.x500.X500Principal
@@ -12,6 +13,8 @@ data class CertificateInfo(
     val sha256Fingerprint: String,
     val validFrom: Date,
     val validUntil: Date,
+    /** The host names and IP addresses the certificate says it is for, so a mismatch can be checked by eye. */
+    val names: List<String>,
 )
 
 fun X509Certificate.toCertificateInfo(): CertificateInfo = CertificateInfo(
@@ -22,4 +25,16 @@ fun X509Certificate.toCertificateInfo(): CertificateInfo = CertificateInfo(
         .joinToString(":") { "%02X".format(it) },
     validFrom = notBefore,
     validUntil = notAfter,
+    names = alternativeNames(),
 )
+
+private const val SAN_DNS_NAME = 2
+private const val SAN_IP_ADDRESS = 7
+
+private fun X509Certificate.alternativeNames(): List<String> = try {
+    subjectAlternativeNames.orEmpty().mapNotNull { entry ->
+        (entry[1] as? String)?.takeIf { entry[0] == SAN_DNS_NAME || entry[0] == SAN_IP_ADDRESS }
+    }
+} catch (_: CertificateParsingException) {
+    emptyList()
+}

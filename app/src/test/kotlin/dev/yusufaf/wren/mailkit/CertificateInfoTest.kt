@@ -20,5 +20,6 @@ class CertificateInfoTest {
         )
         assertEquals(certificate.notBefore, info.validFrom)
         assertEquals(certificate.notAfter, info.validUntil)
+        assertEquals(listOf("localhost", "127.0.0.1"), info.names)
     }
 }

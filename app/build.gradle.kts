@@ -69,6 +69,8 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.work.runtime)
+    // DefaultHostnameVerifier, the same check the trust manager makes; see CertificateProblems.kt.
+    implementation(libs.apache.httpclient5)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
