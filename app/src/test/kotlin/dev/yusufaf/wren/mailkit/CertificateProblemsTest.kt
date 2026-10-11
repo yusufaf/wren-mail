@@ -8,7 +8,9 @@ import dev.yusufaf.wren.mailkit.CertificateProblem.UNTRUSTED_ISSUER
 import java.security.cert.X509Certificate
 import java.util.Date
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CertificateProblemsTest {
@@ -18,6 +20,7 @@ class CertificateProblemsTest {
     private val ipCnOnly = TlsFixture.ipCnOnlyCertificate
     private val otherSan = TlsFixture.otherSanCertificate
     private val ipSanOnly = TlsFixture.ipSanOnlyCertificate
+    private val ipCnIpSan = TlsFixture.ipCnIpSanCertificate
 
     // Each fixture is checked inside its own validity window: the CA-issued
     // one is generated later than the p12 and keytool doesn't backdate.
@@ -78,6 +81,8 @@ class CertificateProblemsTest {
     fun `the fixtures with alternative names have only the expected ones`() {
         assertEquals(listOf(listOf(2, "other.example")), otherSan.subjectAlternativeNames.toList())
         assertEquals(listOf(listOf(7, "127.0.0.1")), ipSanOnly.subjectAlternativeNames.toList())
+        assertEquals(listOf(listOf(7, "127.0.0.1")), ipCnIpSan.subjectAlternativeNames.toList())
+        assertEquals("CN=127.0.0.1", ipCnIpSan.subjectX500Principal.name)
     }
 
     @Test
@@ -94,6 +99,46 @@ class CertificateProblemsTest {
         // RFC 2818 only rules out the CN when a dNSName SAN is present, and
         // DefaultHostnameVerifier falls back to the CN when there are no DNS-type SANs.
         assertEquals(listOf(SELF_SIGNED), ipSanOnly.problemsFor("localhost", ipSanOnly.validAt))
+    }
+
+    @Test
+    fun `an IP host named only by the common name is detected`() {
+        assertTrue(ipCnOnly.namesIpHostOnlyAsCommonName("127.0.0.1"))
+    }
+
+    @Test
+    fun `an IP host that differs from the common name is not named by it`() {
+        assertFalse(ipCnOnly.namesIpHostOnlyAsCommonName("127.0.0.2"))
+    }
+
+    @Test
+    fun `a DNS host is never reported as named only by the common name`() {
+        assertFalse(cnOnly.namesIpHostOnlyAsCommonName("localhost"))
+    }
+
+    @Test
+    fun `a certificate with IP alternative names is not named only by the common name`() {
+        assertFalse(ipCnIpSan.namesIpHostOnlyAsCommonName("127.0.0.1"))
+    }
+
+    @Test
+    fun `common names are read from every relative distinguished name`() {
+        assertEquals(listOf("192.168.1.10"), commonNames("O=Home,CN=192.168.1.10"))
+        assertEquals(listOf("192.168.1.10"), commonNames("CN=192.168.1.10+OU=Mail"))
+    }
+
+    @Test
+    fun `an escaped comma does not start a new name`() {
+        assertEquals(emptyList<String>(), commonNames("O=Acme\\, CN=192.168.1.10"))
+    }
+
+    @Test
+    fun `IP literals are classified as the hostname verifier does`() {
+        assertTrue(isIpLiteral("127.0.0.1"))
+        assertTrue(isIpLiteral("::1"))
+        assertTrue(isIpLiteral("[::1]"))
+        assertFalse(isIpLiteral("localhost"))
+        assertFalse(isIpLiteral("[localhost]"))
     }
 
     @Test
@@ -125,5 +170,11 @@ class CertificateProblemsTest {
     fun `a failure's problems are checked against its own host`() {
         val failure = ConnectionFailure.UntrustedCertificate("mail.example.com", 993, certificate)
         assertEquals(listOf(HOSTNAME_MISMATCH, SELF_SIGNED), failure.problems(certificate.validAt))
+    }
+
+    @Test
+    fun `a failure is checked for a common-name-only address against its own host`() {
+        assertTrue(ConnectionFailure.UntrustedCertificate("127.0.0.1", 993, ipCnOnly).namesHostOnlyAsCommonName())
+        assertFalse(ConnectionFailure.UntrustedCertificate("localhost", 993, ipCnOnly).namesHostOnlyAsCommonName())
     }
 }
