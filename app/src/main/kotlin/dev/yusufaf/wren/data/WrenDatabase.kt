@@ -99,7 +99,7 @@ private val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
-@Database(entities = [CachedEnvelope::class, PendingOp::class], version = 2, exportSchema = false)
+@Database(entities = [CachedEnvelope::class, PendingOp::class], version = 2)
 abstract class WrenDatabase : RoomDatabase() {
     abstract fun inboxDao(): InboxDao
     abstract fun pendingOpDao(): PendingOpDao
