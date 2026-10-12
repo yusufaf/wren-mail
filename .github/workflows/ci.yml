@@ -31,6 +31,16 @@ jobs:
       # assembleRelease surfaces R8 build failures (e.g. missing classes). Tests and lint run
       # on debug only, so it does not prove the keep rules hold at runtime.
       - run: ./gradlew --continue testDebugUnitTest lintDebug assembleRelease
+      # The build regenerates the Room schema; a diff means an entity changed without
+      # committing the new schema (and, usually, without a version bump and migration).
+      - name: Room schemas are up to date
+        run: |
+          if [ -n "$(git status --porcelain -- app/schemas)" ]; then
+            git status --short -- app/schemas
+            git diff -- app/schemas
+            echo "::error::Room schema out of date. Bump the version, add a migration, and commit app/schemas."
+            exit 1
+          fi
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
