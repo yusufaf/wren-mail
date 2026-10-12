@@ -85,6 +85,15 @@ internal object TlsFixture {
      */
     val ipSanOnlyCertificate: X509Certificate = pemCertificate("localhost-ip-san-only.pem")
 
+    /**
+     * tls/ip-cn-ip-san.pem, like [ipCnOnlyCertificate] but also with the
+     * IP alternative name 127.0.0.1, so its CN equals an IP host that a
+     * SAN already names. Regenerate with the same commands, using
+     * -ext SAN=ip:127.0.0.1, a new keystore (-keystore ipcnsan.p12, so the
+     * first alias isn't reused) and -file ip-cn-ip-san.pem.
+     */
+    val ipCnIpSanCertificate: X509Certificate = pemCertificate("ip-cn-ip-san.pem")
+
     private fun pemCertificate(name: String): X509Certificate =
         TlsFixture::class.java.getResourceAsStream("/tls/$name")!!.use {
             CertificateFactory.getInstance("X.509").generateCertificate(it) as X509Certificate

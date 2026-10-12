@@ -29,7 +29,7 @@ fun X509Certificate.toCertificateInfo(): CertificateInfo = CertificateInfo(
 )
 
 private const val SAN_DNS_NAME = 2
-private const val SAN_IP_ADDRESS = 7
+internal const val SAN_IP_ADDRESS = 7
 
 private fun X509Certificate.alternativeNames(): List<String> = try {
     subjectAlternativeNames.orEmpty().mapNotNull { entry ->

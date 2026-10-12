@@ -23,6 +23,7 @@ import androidx.wear.compose.material3.Text
 import dev.yusufaf.wren.mailkit.CertificateInfo
 import dev.yusufaf.wren.mailkit.CertificateProblem
 import dev.yusufaf.wren.mailkit.ConnectionFailure
+import dev.yusufaf.wren.mailkit.namesHostOnlyAsCommonName
 import dev.yusufaf.wren.mailkit.problems
 import dev.yusufaf.wren.mailkit.toCertificateInfo
 import java.text.DateFormat
@@ -45,6 +46,7 @@ fun CertificateTrustDialog(
     val info = remember(failure?.certificate) { failure?.certificate?.toCertificateInfo() }
     val problems = remember(failure) { failure?.problems().orEmpty() }
     val mismatch = CertificateProblem.HOSTNAME_MISMATCH in problems
+    val commonNameOnly = remember(failure) { failure?.namesHostOnlyAsCommonName() == true }
     var confirmingSince by remember(failure) { mutableStateOf<Long?>(null) }
     var armed by remember(failure) { mutableStateOf(false) }
     val confirming = confirmingSince != null
@@ -63,13 +65,13 @@ fun CertificateTrustDialog(
     ) {
         // The exit animation still composes this once failure is null.
         val current = failure ?: return@AlertDialog
-        problems.forEach { item { ProblemText(it, current.host) } }
+        problems.forEach { item { ProblemText(it, current.host, commonNameOnly) } }
         certificateDetails(info!!)
         item {
             Column(modifier = Modifier.fillMaxWidth()) {
                 if (mismatch && confirming) {
                     Text(
-                        "This certificate is for a different server. Trusting it lets that server read your mail.",
+                        mismatchWarning(commonNameOnly),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -130,17 +132,32 @@ internal fun ScalingLazyListScope.certificateDetails(info: CertificateInfo) {
     item { DetailText("Valid", "${dates.format(info.validFrom)} – ${dates.format(info.validUntil)}") }
 }
 
+/**
+ * [commonNameOnly] is for an IP host that the certificate names only as its
+ * common name. That is still a mismatch, but "not issued for" the address
+ * would sit right above a subject that shows it.
+ */
+internal fun problemText(problem: CertificateProblem, host: String, commonNameOnly: Boolean): String = when (problem) {
+    CertificateProblem.HOSTNAME_MISMATCH ->
+        if (commonNameOnly) "Names $host only as its common name, not as an IP address" else "Not issued for $host"
+    CertificateProblem.EXPIRED -> "Expired"
+    CertificateProblem.NOT_YET_VALID -> "Not valid yet"
+    CertificateProblem.SELF_SIGNED -> "Self-signed"
+    CertificateProblem.UNTRUSTED_ISSUER -> "Issuer not trusted"
+}
+
+internal fun mismatchWarning(commonNameOnly: Boolean): String =
+    if (commonNameOnly) {
+        "Only trust this if it is your server's certificate. Trusting it lets whoever holds it read your mail."
+    } else {
+        "This certificate is for a different server. Trusting it lets that server read your mail."
+    }
+
 @Composable
-private fun ProblemText(problem: CertificateProblem, host: String) {
+private fun ProblemText(problem: CertificateProblem, host: String, commonNameOnly: Boolean) {
     val mismatch = problem == CertificateProblem.HOSTNAME_MISMATCH
     Text(
-        when (problem) {
-            CertificateProblem.HOSTNAME_MISMATCH -> "Not issued for $host"
-            CertificateProblem.EXPIRED -> "Expired"
-            CertificateProblem.NOT_YET_VALID -> "Not valid yet"
-            CertificateProblem.SELF_SIGNED -> "Self-signed"
-            CertificateProblem.UNTRUSTED_ISSUER -> "Issuer not trusted"
-        },
+        problemText(problem, host, commonNameOnly),
         modifier = Modifier.fillMaxWidth(),
         style = MaterialTheme.typography.bodyMedium,
         color = if (mismatch) MaterialTheme.colorScheme.error else Color.Unspecified,
