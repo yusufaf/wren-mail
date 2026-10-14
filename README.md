@@ -1,6 +1,5 @@
 # Wren
 
-<!-- TODO(user): one-sentence pitch -->
 A tiny bird on your wrist: an open-source, standalone email client for Wear OS.
 
 Wren reads and triages your IMAP inbox directly on the watch. There is no phone
@@ -9,13 +8,16 @@ provider that offers IMAP with an app password, such as Fastmail, iCloud Mail,
 Gmail or a self-hosted server. It is built for small screens and small
 batteries: read a message, archive it, delete it, flag it, move on.
 
-**Status:** usable, not yet released. It runs on a Galaxy Watch 4 against a real
-Gmail account. What works today:
+**Status:** usable, not yet released. Reading the inbox and opening messages
+are tested on a Galaxy Watch 4 against a real Gmail account. What works today:
 
 - Account setup on the watch: server, port, SSL/TLS or STARTTLS, username and
   app password, with a prompt to trust a self-signed or mismatched certificate
-- Live inbox: sender, subject, time and unread state, cached with Room and
-  synced every 15 minutes with WorkManager
+- Live inbox: sender, subject, time and unread state, cached with Room. A
+  background sync runs about every 15 minutes (WorkManager's minimum interval)
+  while the watch has a network connection, and Android may delay it further
+  in Doze or battery saver. Launching Wren, or tapping Refresh in the inbox,
+  syncs right away.
 - Reading messages as plain text (HTML-only mail is converted to text)
 - Archive, delete, flag and mark read/unread, from the message or by swiping or
   long-pressing an inbox row. Actions that fail offline are queued and retried.
@@ -40,7 +42,15 @@ Wren signs in with an IMAP username and an app password, entered on the watch.
 - Fastmail: `imap.fastmail.com`, [app password](https://www.fastmail.help/hc/en-us/articles/360058752854)
 - iCloud Mail: `imap.mail.me.com`, [app-specific password](https://support.apple.com/en-us/102654)
 - Gmail: `imap.gmail.com`, [app password](https://support.google.com/accounts/answer/185833)
-  (needs 2-Step Verification)
+  (needs 2-Step Verification). Archive and delete behave differently on Gmail,
+  and neither has been tested end to end on Gmail yet:
+  - Delete marks the message deleted and expunges it; it doesn't move it to
+    Trash. With Gmail's default IMAP settings (Auto-Expunge on, "Archive the
+    message"), Gmail archives the message instead of trashing it. To send it
+    to Trash, change that setting in Gmail's Forwarding and POP/IMAP settings.
+  - Archive moves the message to a folder named `Archive`, which Wren creates.
+    On Gmail that folder is an ordinary label called "Archive", so the message
+    leaves the inbox with that label attached. It is not Gmail's own archive.
 - Self-hosted servers, including ones with a self-signed certificate
 
 **Not supported:** Outlook.com, Hotmail and Live addresses, and Microsoft 365
@@ -56,9 +66,10 @@ These are left out on purpose for the first release:
 - Compose and reply
 - OAuth sign-in (app passwords only)
 - HTML rendering and attachments
-- Push (IMAP IDLE): new mail arrives with the 15-minute sync
+- Push (IMAP IDLE): new mail arrives with the next background sync
 - Folders other than the inbox. Archive moves mail to a folder named `Archive`,
   which Wren creates if it is missing.
+- Older mail: the inbox shows only the 50 most recent messages
 - Offline reading: message bodies aren't cached, so opening one needs a
   connection
 
@@ -80,7 +91,8 @@ over the watch's Wireless debugging.
    **Wireless debugging** in Settings > Developer options.
 3. On the phone, install [Wear Installer 2](https://play.google.com/store/apps/details?id=org.freepoc.wearinstaller2)
    or [Bugjaeger](https://play.google.com/store/apps/details?id=eu.sisik.hackendebug),
-   and download `wren-<version>.apk` from the Releases page.
+   and download the `.apk` attached to the latest release on the Releases
+   page.
 4. Pair the app with the watch: on the watch, open Wireless debugging > Pair new
    device, and enter the pairing code and port it shows into the app.
 5. Install the APK from the app, and allow debugging on the watch if it asks.
@@ -93,12 +105,13 @@ With a computer, use `adb` instead:
 ```
 adb pair <watch-ip>:<pairing-port>
 adb connect <watch-ip>:<port>
-adb install wren-<version>.apk
+adb install <downloaded>.apk
 ```
 
-Later releases install over the previous one and keep your account. A build
-you made yourself is signed with a different key, so uninstall it before
-installing a release.
+Release builds will be signed with one release key, so updates install in
+place. An APK you build yourself is signed with a different key, so uninstall
+it before installing a release. Uninstalling erases Wren's data on the watch:
+the saved account and app password, and any trusted certificates.
 
 ## Target hardware
 
