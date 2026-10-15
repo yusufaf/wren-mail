@@ -2,6 +2,18 @@
 
 ## 0.1.0 (2026-10-15)
 
+First release of Wren, a standalone email client for Wear OS that reads and triages IMAP mail directly on the watch.
+
+What it does:
+
+* Account setup on the watch: server, port, SSL/TLS or STARTTLS, username and app password, with a prompt to trust a self-signed or mismatched certificate (trust exceptions can be revoked)
+* Inbox with sender, subject, time and unread state, cached with Room and synced about every 15 minutes
+* Plain-text message reading, with HTML-only mail converted to text
+* Archive, delete, flag and mark read/unread, from the message or by swiping or long-pressing an inbox row; actions that fail offline are queued and retried
+* A minified release build signed with the release key. See "Verify the download" in the README.
+
+Not in this release: compose and reply, HTML rendering, attachments, push (IMAP IDLE) and OAuth.
+
 
 ### Features
 
@@ -18,6 +30,3 @@
 * **ui:** ignore a fast second tap on the hostname-mismatch trust confirmation ([#26](https://github.com/yusufaf/wren-mail/issues/26)) ([b5f8f07](https://github.com/yusufaf/wren-mail/commit/b5f8f07d1c32c12089b2d9a497df08468dbf1b6c)), closes [#21](https://github.com/yusufaf/wren-mail/issues/21)
 
 
-### Build
-
-* add signed release workflow with release-please ([#34](https://github.com/yusufaf/wren-mail/issues/34)) ([b03b16e](https://github.com/yusufaf/wren-mail/commit/b03b16ea2be6d769d882d48b2c371ef28a44fb52))
