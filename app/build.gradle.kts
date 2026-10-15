@@ -15,14 +15,37 @@ room {
 val appVersion = providers.fileContents(rootProject.layout.projectDirectory.file("version.txt"))
     .asText.map { it.trim() }.get()
 
-// "1.2.3" -> 10203, so every release has a larger versionCode than the one before it.
-// TODO(you): implement. Accept only MAJOR.MINOR.PATCH, and fail the build with a clear
-// message for anything else or when MINOR or PATCH is 100 or more (they would collide).
-fun versionCodeFor(version: String): Int = TODO("versionCodeFor")
+// versionCode = MAJOR * 10000 + MINOR * 100 + PATCH ("1.2.3" -> 10203), so every release
+// has a larger versionCode than the one before it.
+fun versionCodeFor(version: String): Int {
+    val parts = Regex("""(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)""").matchEntire(version)
+        ?.destructured?.toList()?.map { it.toLongOrNull() }
+    require(parts != null && parts.none { it == null }) {
+        "version.txt must hold MAJOR.MINOR.PATCH (e.g. 1.2.3), but it holds \"$version\""
+    }
+    val (major, minor, patch) = parts.map { it!! }
+    require(minor < 100 && patch < 100) {
+        "MINOR and PATCH must each be below 100 to fit the versionCode scheme, but version.txt holds $version"
+    }
+    val code = major * 10_000 + minor * 100 + patch
+    // Google Play's ceiling; the platform itself takes any positive Int.
+    require(code in 1..2_100_000_000) {
+        "version $version gives versionCode $code, outside 1..2100000000"
+    }
+    return code.toInt()
+}
 
-// CI provides the release keystore through the environment; locally these are unset and
-// the release build stays debug-signed, so it can still be sideloaded over a debug build.
-fun signingEnv(name: String) = providers.environmentVariable(name)
+// CI provides the release keystore through the environment (see release.yml). Without it
+// the release APK is left unsigned rather than signed with the debug key, which could never
+// update an installed release. -Pwren.debugSignRelease=true opts in to a debug-signed
+// release build for sideloading a minified build over a debug install.
+fun signingEnv(name: String): String =
+    requireNotNull(providers.environmentVariable(name).orNull?.takeIf { it.isNotEmpty() }) {
+        "WREN_KEYSTORE_FILE is set, so $name must be set too"
+    }
+
+val releaseKeystore: String? = providers.environmentVariable("WREN_KEYSTORE_FILE").orNull
+val debugSignRelease = providers.gradleProperty("wren.debugSignRelease").orNull.toBoolean()
 
 android {
     namespace = "dev.yusufaf.wren"
@@ -37,12 +60,12 @@ android {
     }
 
     signingConfigs {
-        if (signingEnv("WREN_KEYSTORE_FILE").isPresent) {
+        if (releaseKeystore != null) {
             create("release") {
-                storeFile = file(signingEnv("WREN_KEYSTORE_FILE").get())
-                storePassword = signingEnv("WREN_KEYSTORE_PASSWORD").get()
-                keyAlias = signingEnv("WREN_KEY_ALIAS").get()
-                keyPassword = signingEnv("WREN_KEY_PASSWORD").get()
+                storeFile = file(releaseKeystore)
+                storePassword = signingEnv("WREN_KEYSTORE_PASSWORD")
+                keyAlias = signingEnv("WREN_KEY_ALIAS")
+                keyPassword = signingEnv("WREN_KEY_PASSWORD")
             }
         }
     }
@@ -60,7 +83,13 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            // Signed, the APK is build/outputs/apk/release/app-release.apk, the path release.yml
+            // verifies and uploads; unsigned, it is app-release-unsigned.apk.
+            signingConfig = when {
+                releaseKeystore != null -> signingConfigs.getByName("release")
+                debugSignRelease -> signingConfigs.getByName("debug")
+                else -> null
+            }
         }
     }
 

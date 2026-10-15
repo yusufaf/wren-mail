@@ -71,14 +71,23 @@ jobs:
           WREN_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: ./gradlew :app:assembleRelease
 
-      # Without this a missing secret would quietly ship a debug-signed APK.
+      # Without this a missing secret would quietly ship a debug-signed APK. AGP names the APK
+      # app-release.apk only when it is signed; unsigned it is app-release-unsigned.apk.
       - name: Verify signing certificate
         env:
+          APK: app/build/outputs/apk/release/app-release.apk
           EXPECTED: ${{ vars.RELEASE_CERT_SHA256 }}
         run: |
+          set -euo pipefail
+          if [ ! -f "$APK" ]; then
+            echo "::error::$APK is missing; the release build was not signed."
+            exit 1
+          fi
           apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
-          actual=$("$apksigner" verify --print-certs app/build/outputs/apk/release/app-release.apk \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          # The line prefix differs between build-tools versions ("Signer #1" up to 35,
+          # "V2 Signer:" in 37), so match only the shared suffix.
+          actual=$("$apksigner" verify --print-certs "$APK" \
+            | sed -n 's/^.*certificate SHA-256 digest: \([0-9a-f]\{64\}\)$/\1/p' | sort -u)
           echo "signer SHA-256: $actual"
           if [ -z "$EXPECTED" ] || [ "$actual" != "$EXPECTED" ]; then
             echo "::error::APK is not signed with the pinned release certificate (RELEASE_CERT_SHA256)."
