@@ -1,12 +1,9 @@
 # Wren
 
-A tiny bird on your wrist: an open-source, standalone email client for Wear OS.
+Wren is a standalone email client for Wear OS that lets you read and triage any IMAP inbox — Fastmail, iCloud, self-hosted, or Gmail with an app password — right on your watch, with no phone app required.
 
-Wren reads and triages your IMAP inbox directly on the watch. There is no phone
-companion app: the watch talks to your mail server itself. It works with any
-provider that offers IMAP with an app password, such as Fastmail, iCloud Mail,
-Gmail or a self-hosted server. It is built for small screens and small
-batteries: read a message, archive it, delete it, flag it, move on.
+The watch talks to your mail server itself. It is built for small screens and
+small batteries: read a message, archive it, delete it, flag it, move on.
 
 **Status:** usable, not yet released. Reading the inbox and opening messages
 are tested on a Galaxy Watch 4 against a real Gmail account. What works today:
@@ -131,6 +128,11 @@ Install on a watch or Wear OS emulator over ADB:
 ```
 adb install app/build/outputs/apk/debug/app-debug.apk
 ```
+
+`./gradlew :app:assembleRelease` builds a minified APK that is left unsigned
+unless the release keystore is configured (CI only). To sideload a minified
+build, sign it with the debug key instead:
+`./gradlew :app:assembleRelease -Pwren.debugSignRelease=true`.
 
 ## Tech
 
