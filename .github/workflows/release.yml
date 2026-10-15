@@ -82,7 +82,9 @@ jobs:
           actual=$("$apksigner" verify --print-certs app/build/outputs/apk/release/app-release.apk \
             | sed -n 's/^.*certificate SHA-256 digest: \([0-9a-f]\{64\}\)$/\1/p' | sort -u)
           echo "signer SHA-256: $actual"
-          if [ -z "$EXPECTED" ] || [ "$actual" != "$EXPECTED" ]; then
+          # Accept the variable as keytool prints it (upper case, colon-separated) or as plain hex.
+          expected=$(printf '%s' "$EXPECTED" | tr -d ':[:space:]' | tr 'A-F' 'a-f')
+          if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
             echo "::error::APK is not signed with the pinned release certificate (RELEASE_CERT_SHA256)."
             exit 1
           fi
@@ -101,7 +103,8 @@ jobs:
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY"
+        # --clobber lets a re-run replace assets a failed first attempt already uploaded.
+        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
 
       - name: Delete keystore
         if: always()

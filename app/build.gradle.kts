@@ -46,7 +46,15 @@ android {
     }
 
     signingConfigs {
-        if (signingEnv("WREN_KEYSTORE_FILE").isPresent) {
+        val signingVars = listOf(
+            "WREN_KEYSTORE_FILE", "WREN_KEYSTORE_PASSWORD", "WREN_KEY_ALIAS", "WREN_KEY_PASSWORD",
+        )
+        val missing = signingVars.filterNot { signingEnv(it).isPresent }
+        // All or nothing: a partial set is a misconfiguration, not a request for a debug build.
+        check(missing.isEmpty() || missing.size == signingVars.size) {
+            "Release signing needs all of ${signingVars.joinToString()}; missing: ${missing.joinToString()}"
+        }
+        if (missing.isEmpty()) {
             create("release") {
                 storeFile = file(signingEnv("WREN_KEYSTORE_FILE").get())
                 storePassword = signingEnv("WREN_KEYSTORE_PASSWORD").get()
