@@ -10,6 +10,20 @@ room {
     schemaDirectory("$projectDir/schemas")
 }
 
+// version.txt is the single source of truth; release-please bumps it. Reading it through
+// a provider makes it a configuration-cache input, so a bump invalidates the cache.
+val appVersion = providers.fileContents(rootProject.layout.projectDirectory.file("version.txt"))
+    .asText.map { it.trim() }.get()
+
+// "1.2.3" -> 10203, so every release has a larger versionCode than the one before it.
+// TODO(you): implement. Accept only MAJOR.MINOR.PATCH, and fail the build with a clear
+// message for anything else or when MINOR or PATCH is 100 or more (they would collide).
+fun versionCodeFor(version: String): Int = TODO("versionCodeFor")
+
+// CI provides the release keystore through the environment; locally these are unset and
+// the release build stays debug-signed, so it can still be sideloaded over a debug build.
+fun signingEnv(name: String) = providers.environmentVariable(name)
+
 android {
     namespace = "dev.yusufaf.wren"
     compileSdk = 36
@@ -18,8 +32,25 @@ android {
         applicationId = "dev.yusufaf.wren"
         minSdk = 30
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = versionCodeFor(appVersion)
+        versionName = appVersion
+    }
+
+    signingConfigs {
+        if (signingEnv("WREN_KEYSTORE_FILE").isPresent) {
+            create("release") {
+                storeFile = file(signingEnv("WREN_KEYSTORE_FILE").get())
+                storePassword = signingEnv("WREN_KEYSTORE_PASSWORD").get()
+                keyAlias = signingEnv("WREN_KEY_ALIAS").get()
+                keyPassword = signingEnv("WREN_KEY_PASSWORD").get()
+            }
+        }
+    }
+
+    // F-Droid and IzzyOnDroid cannot read the encrypted dependency blob AGP adds by default.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
     }
 
     buildTypes {
@@ -29,9 +60,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            // Debug-signed so the release build can be sideloaded for testing;
-            // a real release keystore comes with the first published build.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 
