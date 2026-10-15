@@ -8,7 +8,7 @@ provider that offers IMAP with an app password, such as Fastmail, iCloud Mail,
 Gmail or a self-hosted server. It is built for small screens and small
 batteries: read a message, archive it, delete it, flag it, move on.
 
-**Status:** usable, not yet released. Reading the inbox and opening messages
+**Status:** early but usable. Reading the inbox and opening messages
 are tested on a Galaxy Watch 4 against a real Gmail account. What works today:
 
 - Account setup on the watch: server, port, SSL/TLS or STARTTLS, username and
@@ -21,7 +21,7 @@ are tested on a Galaxy Watch 4 against a real Gmail account. What works today:
 - Reading messages as plain text (HTML-only mail is converted to text)
 - Archive, delete, flag and mark read/unread, from the message or by swiping or
   long-pressing an inbox row. Actions that fail offline are queued and retried.
-- A minified release build
+- A minified, signed release build
 
 ## Why
 
@@ -75,9 +75,9 @@ These are left out on purpose for the first release:
 
 ## Install
 
-There is no release yet. The first signed APK will be published on the
-[Releases page](https://github.com/yusufaf/wren-mail/releases). Until then you
-can build it yourself (see [Building](#building)).
+Signed APKs are published on the
+[Releases page](https://github.com/yusufaf/wren-mail/releases). You can also
+build it yourself (see [Building](#building)).
 
 Wren isn't on the Play Store, so the APK has to be sideloaded onto the watch.
 You don't need a computer for that: an app on your Android phone can install it
@@ -108,10 +108,35 @@ adb connect <watch-ip>:<port>
 adb install <downloaded>.apk
 ```
 
-Release builds will be signed with one release key, so updates install in
-place. An APK you build yourself is signed with a different key, so uninstall
-it before installing a release. Uninstalling erases Wren's data on the watch:
-the saved account and app password, and any trusted certificates.
+Releases are signed with one release key, so updates install in place. An APK
+you build yourself is signed with a different key, so uninstall it before
+installing a release. Uninstalling erases Wren's data on the watch: the saved
+account and app password, and any trusted certificates.
+
+### Verify the download
+
+Each release has `wren-<version>.apk`, a `wren-<version>.apk.sha256` checksum and
+the R8 `wren-<version>-mapping.txt`. To check that the APK is the one built from
+this repository:
+
+```
+sha256sum -c wren-<version>.apk.sha256
+gh attestation verify wren-<version>.apk -R yusufaf/wren-mail
+```
+
+To check the signing key, `apksigner verify --print-certs wren-<version>.apk`
+(from the Android SDK build-tools) should print this certificate SHA-256 digest:
+
+```
+ac1480ad30581ce2232b71ce75fad0922a038bbae32f3b4a26156e35c0c3aab8
+```
+
+As colon-separated bytes, the form most verification apps (AppVerifier,
+Obtainium) show:
+
+```
+AC:14:80:AD:30:58:1C:E2:23:2B:71:CE:75:FA:D0:92:2A:03:8B:BA:E3:2F:3B:4A:26:15:6E:35:C0:C3:AA:B8
+```
 
 ## Target hardware
 
