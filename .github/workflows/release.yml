@@ -77,8 +77,10 @@ jobs:
           EXPECTED: ${{ vars.RELEASE_CERT_SHA256 }}
         run: |
           apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+          # build-tools up to 36 print "Signer #1 certificate SHA-256 digest: <hex>", 37 prints
+          # "V2 Signer: certificate SHA-256 digest: <hex>"; match the shared tail of the line.
           actual=$("$apksigner" verify --print-certs app/build/outputs/apk/release/app-release.apk \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+            | sed -n 's/^.*certificate SHA-256 digest: \([0-9a-f]\{64\}\)$/\1/p' | sort -u)
           echo "signer SHA-256: $actual"
           if [ -z "$EXPECTED" ] || [ "$actual" != "$EXPECTED" ]; then
             echo "::error::APK is not signed with the pinned release certificate (RELEASE_CERT_SHA256)."

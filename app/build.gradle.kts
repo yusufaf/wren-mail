@@ -16,9 +16,18 @@ val appVersion = providers.fileContents(rootProject.layout.projectDirectory.file
     .asText.map { it.trim() }.get()
 
 // "1.2.3" -> 10203, so every release has a larger versionCode than the one before it.
-// TODO(you): implement. Accept only MAJOR.MINOR.PATCH, and fail the build with a clear
-// message for anything else or when MINOR or PATCH is 100 or more (they would collide).
-fun versionCodeFor(version: String): Int = TODO("versionCodeFor")
+// MINOR and PATCH get two digits each, so the pattern only admits values below 100.
+fun versionCodeFor(version: String): Int {
+    val match = Regex("""(0|[1-9]\d{0,3})\.(0|[1-9]\d?)\.(0|[1-9]\d?)""").matchEntire(version)
+    require(match != null) {
+        "version.txt must be MAJOR.MINOR.PATCH with MAJOR up to 9999 and MINOR and PATCH " +
+            "below 100 (e.g. 1.2.3), but it holds \"$version\""
+    }
+    val (major, minor, patch) = match.destructured
+    val code = major.toInt() * 10_000 + minor.toInt() * 100 + patch.toInt()
+    require(code > 0) { "version $version gives versionCode 0, which Android rejects" }
+    return code
+}
 
 // CI provides the release keystore through the environment; locally these are unset and
 // the release build stays debug-signed, so it can still be sideloaded over a debug build.
