@@ -61,7 +61,12 @@ jobs:
       - name: Decode keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
-        run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/wren-release.jks"
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::RELEASE_KEYSTORE_BASE64 is not set in the release environment."
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/wren-release.jks"
 
       - name: Build
         env:
@@ -79,6 +84,8 @@ jobs:
           EXPECTED: ${{ vars.RELEASE_CERT_SHA256 }}
         run: |
           set -euo pipefail
+          # Accept keytool's format (uppercase, colon-separated) as well as apksigner's.
+          EXPECTED=$(printf '%s' "$EXPECTED" | tr -d ':' | tr 'A-F' 'a-f')
           if [ ! -f "$APK" ]; then
             echo "::error::$APK is missing; the release build was not signed."
             exit 1
@@ -108,7 +115,8 @@ jobs:
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY"
+        # --clobber, so re-running a failed apk job can replace files uploaded before the failure.
+        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
 
       - name: Delete keystore
         if: always()

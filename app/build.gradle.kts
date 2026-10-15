@@ -18,12 +18,12 @@ val appVersion = providers.fileContents(rootProject.layout.projectDirectory.file
 // versionCode = MAJOR * 10000 + MINOR * 100 + PATCH ("1.2.3" -> 10203), so every release
 // has a larger versionCode than the one before it.
 fun versionCodeFor(version: String): Int {
-    val parts = Regex("""(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)""").matchEntire(version)
-        ?.destructured?.toList()?.map { it.toLongOrNull() }
-    require(parts != null && parts.none { it == null }) {
+    // At most 9 digits per part, so the arithmetic below cannot overflow a Long.
+    val match = Regex("""(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})""").matchEntire(version)
+    requireNotNull(match) {
         "version.txt must hold MAJOR.MINOR.PATCH (e.g. 1.2.3), but it holds \"$version\""
     }
-    val (major, minor, patch) = parts.map { it!! }
+    val (major, minor, patch) = match.destructured.toList().map { it.toLong() }
     require(minor < 100 && patch < 100) {
         "MINOR and PATCH must each be below 100 to fit the versionCode scheme, but version.txt holds $version"
     }
@@ -44,7 +44,8 @@ fun signingEnv(name: String): String =
         "WREN_KEYSTORE_FILE is set, so $name must be set too"
     }
 
-val releaseKeystore: String? = providers.environmentVariable("WREN_KEYSTORE_FILE").orNull
+val releaseKeystore: String? =
+    providers.environmentVariable("WREN_KEYSTORE_FILE").orNull?.takeIf { it.isNotEmpty() }
 val debugSignRelease = providers.gradleProperty("wren.debugSignRelease").orNull.toBoolean()
 
 android {
