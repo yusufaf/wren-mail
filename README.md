@@ -115,17 +115,26 @@ account and app password, and any trusted certificates.
 
 ### Verify the download
 
-Each release has `wren-<version>.apk`, a `wren-<version>.apk.sha256` checksum and
-the R8 `wren-<version>-mapping.txt`. To check that the APK is the one built from
-this repository:
+Each release has `wren-<tag>.apk`, a `wren-<tag>.apk.sha256` checksum and the
+R8 `wren-<tag>-mapping.txt`, where `<tag>` includes the leading `v`, for example
+`wren-v0.1.0.apk`.
 
 ```
-sha256sum -c wren-<version>.apk.sha256
-gh attestation verify wren-<version>.apk -R yusufaf/wren-mail
+sha256sum -c wren-<tag>.apk.sha256
+gh attestation verify wren-<tag>.apk -R yusufaf/wren-mail
 ```
 
-To check the signing key, `apksigner verify --print-certs wren-<version>.apk`
+The checksum only detects a corrupted download: anyone who can replace the APK
+can replace the checksum file too. The attestation is what ties the APK to the
+workflow in this repository that built it. It needs the
+[GitHub CLI](https://cli.github.com/) 2.49 or newer, and `-R` must name the
+repository the release came from.
+
+To check the signing key, `apksigner verify --print-certs wren-<tag>.apk`
 (from the Android SDK build-tools) should print this certificate SHA-256 digest:
+
+<!-- Keep in sync with the RELEASE_CERT_SHA256 repository variable, which the
+     release workflow checks the APK against. -->
 
 ```
 ac1480ad30581ce2232b71ce75fad0922a038bbae32f3b4a26156e35c0c3aab8
