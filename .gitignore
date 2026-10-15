@@ -11,6 +11,11 @@ captures/
 # Kotlin
 .kotlin/
 
+# Signing material
+*.jks
+*.keystore
+keystore.properties
+
 # OS
 .DS_Store
 Thumbs.db
