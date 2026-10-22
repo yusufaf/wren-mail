@@ -11,6 +11,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.fsck.k9.mail.ConnectionSecurity
 import java.io.IOException
 import java.util.Base64
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -30,8 +31,9 @@ private val base64Decoder = Base64.getDecoder()
  * stored; host, port, security and username stay in plain text. A v0.1.0
  * plaintext password is encrypted on first read. A password that can never be
  * decrypted (key gone, data damaged) clears the account so setup shows again,
- * and a transient Keystore failure leaves the account stored and reads as no
- * account until the next read.
+ * and any other decrypt failure leaves the account stored and reads as no
+ * account until the account is read again (after a write, or by a new
+ * collector such as a sync run or the next launch).
  */
 class AccountStore(
     private val dataStore: DataStore<Preferences>,
@@ -92,8 +94,9 @@ class AccountStore(
     private suspend fun migrateLegacyPassword(plaintext: String) {
         val encrypted = try {
             cipher.encrypt(plaintext)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            // Nothing in the try suspends, so this can't swallow a CancellationException.
             Log.w(e, "Couldn't encrypt the legacy password; will retry")
             return
         }
@@ -114,18 +117,21 @@ class AccountStore(
      * Decrypts the stored password. If it can never be decrypted (the Keystore key
      * is gone or the stored data is damaged), clears the account so setup shows
      * again. Any other failure may be transient (a busy Keystore), so the account
-     * is kept and this read returns null; the next read tries again.
+     * is kept and this read returns null. A running collector reads again only
+     * after the next write; a new collection (a sync run, the next launch) reads
+     * afresh.
      */
     private suspend fun decryptPassword(prefs: Preferences): String? {
         val ciphertext = prefs[Keys.passwordCiphertext] ?: return null
         return try {
             cipher.decrypt(decodeStoredPassword(ciphertext, prefs[Keys.passwordIv]))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: PasswordUnrecoverableException) {
             Log.w(e, "Stored password can't be decrypted; clearing the account")
             clearIfStillStored(ciphertext)
             null
         } catch (e: Exception) {
-            // Nothing in the try suspends, so this can't swallow a CancellationException.
             Log.w(e, "Couldn't decrypt the stored password; keeping the account to retry")
             null
         }

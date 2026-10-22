@@ -12,6 +12,7 @@ import java.io.IOException
 import java.security.GeneralSecurityException
 import java.security.ProviderException
 import java.util.Base64
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -190,6 +191,29 @@ class AccountStoreTest {
 
         cipher.decryptFailure = null
         assertEquals(TEST_ACCOUNT, store.account.first())
+    }
+
+    @Test
+    fun `cancellation from decrypt is not swallowed`() = runTest {
+        store.save(TEST_ACCOUNT)
+        val saved = raw()
+        cipher.decryptFailure = CancellationException("fake")
+
+        val thrown = runCatching { store.account.first() }.exceptionOrNull()
+
+        assertTrue("expected CancellationException, got $thrown", thrown is CancellationException)
+        assertEquals(saved, raw())
+    }
+
+    @Test
+    fun `cancellation from legacy encryption is not swallowed`() = runTest {
+        seedLegacyAccount()
+        cipher.encryptFailure = CancellationException("fake")
+
+        val thrown = runCatching { store.account.first() }.exceptionOrNull()
+
+        assertTrue("expected CancellationException, got $thrown", thrown is CancellationException)
+        assertEquals(CANARY, raw()[PASSWORD])
     }
 
     @Test
