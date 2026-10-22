@@ -1,55 +1,86 @@
 package dev.yusufaf.wren.account
 
 import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.fsck.k9.mail.ConnectionSecurity
+import java.util.Base64
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 
 private val Context.accountDataStore by preferencesDataStore(name = "account")
 
+private val base64Encoder = Base64.getEncoder()
+private val base64Decoder = Base64.getDecoder()
+
 /**
  * Persists the single v1 account in app-private DataStore. The password is
- * stored in plain text inside the app sandbox; watch-local at-rest encryption
- * is a later hardening step.
+ * encrypted with an Android Keystore key and only its ciphertext and IV are
+ * stored; host, port, security and username stay in plain text.
  */
-class AccountStore(private val context: Context) {
+class AccountStore(
+    private val dataStore: DataStore<Preferences>,
+    private val cipher: PasswordCipher,
+) {
+    constructor(context: Context) : this(context.accountDataStore, KeystorePasswordCipher())
 
     private object Keys {
         val host = stringPreferencesKey("host")
         val port = intPreferencesKey("port")
         val security = stringPreferencesKey("security")
         val username = stringPreferencesKey("username")
-        val password = stringPreferencesKey("password")
+        val passwordCiphertext = stringPreferencesKey("password_ciphertext")
+        val passwordIv = stringPreferencesKey("password_iv")
     }
 
-    val account: Flow<Account?> = context.accountDataStore.data.map { prefs ->
-        val host = prefs[Keys.host] ?: return@map null
-        Account(
-            host = host,
-            port = prefs[Keys.port] ?: return@map null,
-            security = prefs[Keys.security]
-                ?.let { runCatching { ConnectionSecurity.valueOf(it) }.getOrNull() }
-                ?: return@map null,
-            username = prefs[Keys.username] ?: return@map null,
-            password = prefs[Keys.password] ?: return@map null,
-        )
-    }
+    val account: Flow<Account?> = dataStore.data
+        .map { prefs -> read(prefs) }
+        .distinctUntilChanged()
+        .flowOn(Dispatchers.IO)
 
     suspend fun save(account: Account) {
-        context.accountDataStore.edit { prefs ->
+        val encrypted = withContext(Dispatchers.IO) { cipher.encrypt(account.password) }
+        dataStore.edit { prefs ->
             prefs[Keys.host] = account.host
             prefs[Keys.port] = account.port
             prefs[Keys.security] = account.security.name
             prefs[Keys.username] = account.username
-            prefs[Keys.password] = account.password
+            prefs.putPassword(encrypted)
         }
     }
 
     suspend fun clear() {
-        context.accountDataStore.edit { it.clear() }
+        dataStore.edit { it.clear() }
+    }
+
+    private suspend fun read(prefs: Preferences): Account? {
+        val host = prefs[Keys.host] ?: return null
+        val port = prefs[Keys.port] ?: return null
+        val security = prefs[Keys.security]
+            ?.let { runCatching { ConnectionSecurity.valueOf(it) }.getOrNull() }
+            ?: return null
+        val username = prefs[Keys.username] ?: return null
+        val password = decryptPassword(prefs) ?: return null
+        return Account(host, port, security, username, password)
+    }
+
+    private suspend fun decryptPassword(prefs: Preferences): String? {
+        val ciphertext = prefs[Keys.passwordCiphertext] ?: return null
+        val iv = prefs[Keys.passwordIv] ?: return null
+        return cipher.decrypt(EncryptedPassword(base64Decoder.decode(ciphertext), base64Decoder.decode(iv)))
+    }
+
+    private fun MutablePreferences.putPassword(encrypted: EncryptedPassword) {
+        this[Keys.passwordCiphertext] = base64Encoder.encodeToString(encrypted.ciphertext)
+        this[Keys.passwordIv] = base64Encoder.encodeToString(encrypted.iv)
     }
 }
