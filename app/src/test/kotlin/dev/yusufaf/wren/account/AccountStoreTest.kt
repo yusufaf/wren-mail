@@ -10,8 +10,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import com.fsck.k9.mail.ConnectionSecurity
 import java.io.IOException
 import java.security.GeneralSecurityException
+import java.security.ProviderException
 import java.util.Base64
-import javax.crypto.AEADBadTagException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -69,16 +69,17 @@ private class FailingWritesDataStore(private val delegate: DataStore<Preferences
 
 /** XORs each byte with a constant and uses a fixed IV, so tests can predict and corrupt it. */
 private class FakePasswordCipher : PasswordCipher {
-    var failEncrypt = false
-    var failDecrypt = false
+    var encryptFailure: Exception? = null
+    var decryptFailure: Exception? = null
 
     override fun encrypt(plaintext: String): EncryptedPassword {
-        if (failEncrypt) throw GeneralSecurityException("fake")
+        encryptFailure?.let { throw it }
         return EncryptedPassword(xor(plaintext.toByteArray(Charsets.UTF_8)), IV.copyOf())
     }
 
     override fun decrypt(encrypted: EncryptedPassword): String {
-        if (failDecrypt || !encrypted.iv.contentEquals(IV)) throw AEADBadTagException("fake")
+        decryptFailure?.let { throw it }
+        if (!encrypted.iv.contentEquals(IV)) throw PasswordUnrecoverableException("fake")
         return String(xor(encrypted.ciphertext), Charsets.UTF_8)
     }
 
@@ -152,14 +153,43 @@ class AccountStoreTest {
     @Test
     fun `legacy password stays readable when encryption fails`() = runTest {
         seedLegacyAccount()
-        cipher.failEncrypt = true
+        cipher.encryptFailure = GeneralSecurityException("fake")
 
         assertEquals(TEST_ACCOUNT, store.account.first())
         assertEquals(CANARY, raw()[PASSWORD])
 
-        cipher.failEncrypt = false
+        cipher.encryptFailure = null
         store.account.first()
         assertNull(raw()[PASSWORD])
+    }
+
+    @Test
+    fun `legacy password stays readable when encryption throws unexpectedly`() = runTest {
+        seedLegacyAccount()
+        cipher.encryptFailure = IllegalStateException("fake")
+
+        assertEquals(TEST_ACCOUNT, store.account.first())
+        assertEquals(CANARY, raw()[PASSWORD])
+    }
+
+    @Test
+    fun `transient decrypt failure keeps the account`() = runTest {
+        store.save(TEST_ACCOUNT)
+        val saved = raw()
+
+        for (e in listOf(
+            ProviderException("fake"),
+            GeneralSecurityException("fake"),
+            IllegalStateException("fake"),
+            IOException("fake"),
+        )) {
+            cipher.decryptFailure = e
+            assertNull(store.account.first())
+            assertEquals(saved, raw())
+        }
+
+        cipher.decryptFailure = null
+        assertEquals(TEST_ACCOUNT, store.account.first())
     }
 
     @Test
@@ -184,7 +214,7 @@ class AccountStoreTest {
     @Test
     fun `undecryptable password clears the account`() = runTest {
         store.save(TEST_ACCOUNT)
-        cipher.failDecrypt = true
+        cipher.decryptFailure = PasswordUnrecoverableException("fake")
 
         assertNull(store.account.first())
         assertTrue(raw().asMap().isEmpty())
@@ -220,7 +250,7 @@ class AccountStoreTest {
     @Test
     fun `undecryptable password reads as no account when the clear write fails`() = runTest {
         store.save(TEST_ACCOUNT)
-        cipher.failDecrypt = true
+        cipher.decryptFailure = PasswordUnrecoverableException("fake")
         writes.failWrites = true
 
         assertNull(store.account.first())

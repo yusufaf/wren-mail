@@ -1,9 +1,11 @@
 package dev.yusufaf.wren.account
 
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
-import java.security.InvalidKeyException
+import java.security.InvalidAlgorithmParameterException
 import java.security.KeyStore
+import javax.crypto.BadPaddingException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -23,11 +25,23 @@ class KeystorePasswordCipher(private val alias: String = "wren-account-password"
         return EncryptedPassword(cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8)), cipher.iv)
     }
 
+    // Only failures that will repeat on every attempt become PasswordUnrecoverableException.
+    // Generic Keystore errors (InvalidKeyException, ProviderException, ...) can carry
+    // transient error codes, so they propagate as they are.
     override fun decrypt(encrypted: EncryptedPassword): String {
-        val key = loadKey() ?: throw InvalidKeyException("No Keystore key under $alias")
+        val key = loadKey() ?: throw PasswordUnrecoverableException("No Keystore key under $alias")
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, encrypted.iv))
-        return String(cipher.doFinal(encrypted.ciphertext), Charsets.UTF_8)
+        try {
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, encrypted.iv))
+            return String(cipher.doFinal(encrypted.ciphertext), Charsets.UTF_8)
+        } catch (e: KeyPermanentlyInvalidatedException) {
+            throw PasswordUnrecoverableException("Keystore key under $alias is gone or invalidated", e)
+        } catch (e: InvalidAlgorithmParameterException) {
+            throw PasswordUnrecoverableException("Stored IV is unusable", e)
+        } catch (e: BadPaddingException) {
+            // Includes AEADBadTagException: the data doesn't authenticate under this key.
+            throw PasswordUnrecoverableException("Stored password doesn't authenticate", e)
+        }
     }
 
     private fun loadKey(): SecretKey? =
