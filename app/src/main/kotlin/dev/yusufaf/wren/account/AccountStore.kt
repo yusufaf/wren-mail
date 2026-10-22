@@ -9,6 +9,9 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.fsck.k9.mail.ConnectionSecurity
+import java.io.IOException
+import java.security.GeneralSecurityException
+import java.security.ProviderException
 import java.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -16,6 +19,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import net.thunderbird.legacy.logging.Log
 
 private val Context.accountDataStore by preferencesDataStore(name = "account")
 
@@ -40,6 +44,9 @@ class AccountStore(
         val username = stringPreferencesKey("username")
         val passwordCiphertext = stringPreferencesKey("password_ciphertext")
         val passwordIv = stringPreferencesKey("password_iv")
+
+        // v0.1.0 kept the password here in plain text; read only to migrate it.
+        val legacyPassword = stringPreferencesKey("password")
     }
 
     val account: Flow<Account?> = dataStore.data
@@ -55,6 +62,7 @@ class AccountStore(
             prefs[Keys.security] = account.security.name
             prefs[Keys.username] = account.username
             prefs.putPassword(encrypted)
+            prefs.remove(Keys.legacyPassword)
         }
     }
 
@@ -69,8 +77,37 @@ class AccountStore(
             ?.let { runCatching { ConnectionSecurity.valueOf(it) }.getOrNull() }
             ?: return null
         val username = prefs[Keys.username] ?: return null
-        val password = decryptPassword(prefs) ?: return null
+        val password = prefs[Keys.legacyPassword]?.also { migrateLegacyPassword(it) }
+            ?: decryptPassword(prefs)
+            ?: return null
         return Account(host, port, security, username, password)
+    }
+
+    /**
+     * Replaces a v0.1.0 plaintext password with its ciphertext. On failure the
+     * plaintext stays, so the user stays signed in and the next read retries.
+     */
+    private suspend fun migrateLegacyPassword(plaintext: String) {
+        val encrypted = try {
+            cipher.encrypt(plaintext)
+        } catch (e: GeneralSecurityException) {
+            Log.w(e, "Couldn't encrypt the legacy password; will retry")
+            return
+        } catch (e: ProviderException) {
+            Log.w(e, "Couldn't encrypt the legacy password; will retry")
+            return
+        }
+        try {
+            dataStore.edit { prefs ->
+                // Only the first writer migrates: another collector or a save may have got here first.
+                if (prefs[Keys.legacyPassword] == plaintext) {
+                    prefs.putPassword(encrypted)
+                    prefs.remove(Keys.legacyPassword)
+                }
+            }
+        } catch (e: IOException) {
+            Log.w(e, "Couldn't write the encrypted legacy password; will retry")
+        }
     }
 
     private suspend fun decryptPassword(prefs: Preferences): String? {
