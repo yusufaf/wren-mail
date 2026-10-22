@@ -29,7 +29,9 @@ private val base64Decoder = Base64.getDecoder()
 /**
  * Persists the single v1 account in app-private DataStore. The password is
  * encrypted with an Android Keystore key and only its ciphertext and IV are
- * stored; host, port, security and username stay in plain text.
+ * stored; host, port, security and username stay in plain text. A v0.1.0
+ * plaintext password is encrypted on first read, and a password that can't be
+ * decrypted clears the account so setup shows again.
  */
 class AccountStore(
     private val dataStore: DataStore<Preferences>,
@@ -110,10 +112,33 @@ class AccountStore(
         }
     }
 
+    /**
+     * Returns null, and clears the account so setup shows again, when the
+     * password can't be decrypted: the Keystore key is gone or the stored data
+     * is damaged. Retrying would fail the same way.
+     */
     private suspend fun decryptPassword(prefs: Preferences): String? {
         val ciphertext = prefs[Keys.passwordCiphertext] ?: return null
-        val iv = prefs[Keys.passwordIv] ?: return null
-        return cipher.decrypt(EncryptedPassword(base64Decoder.decode(ciphertext), base64Decoder.decode(iv)))
+        val password = try {
+            val iv = prefs[Keys.passwordIv] ?: throw GeneralSecurityException("No IV stored")
+            cipher.decrypt(EncryptedPassword(base64Decoder.decode(ciphertext), base64Decoder.decode(iv)))
+        } catch (e: GeneralSecurityException) {
+            null
+        } catch (e: ProviderException) {
+            null
+        } catch (e: IllegalArgumentException) {
+            null // Not valid Base64.
+        }
+        if (password == null) {
+            Log.w("Stored password can't be decrypted; clearing the account")
+            try {
+                // Skip the clear if a save replaced the password since this read.
+                dataStore.edit { p -> if (p[Keys.passwordCiphertext] == ciphertext) p.clear() }
+            } catch (e: IOException) {
+                Log.w(e, "Couldn't clear the account; will retry")
+            }
+        }
+        return password
     }
 
     private fun MutablePreferences.putPassword(encrypted: EncryptedPassword) {

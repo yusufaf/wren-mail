@@ -1,6 +1,7 @@
 package dev.yusufaf.wren.account
 
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
@@ -21,6 +22,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 private const val CANARY = "wren-canary-7f3"
@@ -98,16 +100,19 @@ class AccountStoreTest {
 
     private fun Preferences.containsCanary() = asMap().values.any { it.toString().contains(CANARY) }
 
-    /** Writes the account the way v0.1.0 did, with the password in plain text. */
-    private suspend fun seedLegacyAccount() {
+    /** Writes [TEST_ACCOUNT]'s plain-text fields, then lets [password] store the password. */
+    private suspend fun seedAccount(password: (MutablePreferences) -> Unit) {
         dataStore.edit { prefs ->
             prefs[HOST] = TEST_ACCOUNT.host
             prefs[PORT] = TEST_ACCOUNT.port
             prefs[SECURITY] = TEST_ACCOUNT.security.name
             prefs[USERNAME] = TEST_ACCOUNT.username
-            prefs[PASSWORD] = CANARY
+            password(prefs)
         }
     }
+
+    /** Writes the account the way v0.1.0 did, with the password in plain text. */
+    private suspend fun seedLegacyAccount() = seedAccount { it[PASSWORD] = CANARY }
 
     @Test
     fun `save stores the password only as ciphertext`() = runTest {
@@ -174,5 +179,51 @@ class AccountStoreTest {
 
         assertNull(raw()[PASSWORD])
         assertEquals("new", store.account.first()?.password)
+    }
+
+    @Test
+    fun `undecryptable password clears the account`() = runTest {
+        store.save(TEST_ACCOUNT)
+        cipher.failDecrypt = true
+
+        assertNull(store.account.first())
+        assertTrue(raw().asMap().isEmpty())
+    }
+
+    @Test
+    fun `missing iv clears the account`() = runTest {
+        seedAccount { it[PASSWORD_CIPHERTEXT] = "AQID" }
+
+        assertNull(store.account.first())
+        assertTrue(raw().asMap().isEmpty())
+    }
+
+    @Test
+    fun `malformed ciphertext clears the account`() = runTest {
+        seedAccount { prefs ->
+            prefs[PASSWORD_CIPHERTEXT] = "not base64!"
+            prefs[PASSWORD_IV] = "AQID"
+        }
+
+        assertNull(store.account.first())
+        assertTrue(raw().asMap().isEmpty())
+    }
+
+    @Test
+    fun `incomplete account is not cleared`() = runTest {
+        dataStore.edit { it[HOST] = TEST_ACCOUNT.host }
+
+        assertNull(store.account.first())
+        assertEquals(TEST_ACCOUNT.host, raw()[HOST])
+    }
+
+    @Test
+    fun `undecryptable password reads as no account when the clear write fails`() = runTest {
+        store.save(TEST_ACCOUNT)
+        cipher.failDecrypt = true
+        writes.failWrites = true
+
+        assertNull(store.account.first())
+        assertNotNull(raw()[PASSWORD_CIPHERTEXT])
     }
 }

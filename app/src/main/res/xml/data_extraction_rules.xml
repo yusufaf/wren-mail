@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The account's app password is stored in plain text, so none of Wren's data leaves the
-     watch. allowBackup="false" covers cloud backup; this also stops device-to-device
-     transfer, which Android 12+ still performs when allowBackup is false. -->
+<!-- None of Wren's data leaves the watch: the app password's Keystore key is never backed
+     up, so a copy of the encrypted password would be useless elsewhere, and the rest is
+     account and cache data. allowBackup="false" covers cloud backup; this also stops
+     device-to-device transfer, which Android 12+ still performs when allowBackup is false. -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="root" path="." />
