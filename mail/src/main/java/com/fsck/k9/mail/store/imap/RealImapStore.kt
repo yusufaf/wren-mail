@@ -192,7 +192,8 @@ internal open class RealImapStore(
 
             val existingItem = folderMap[serverId]
             if (existingItem == null || existingItem.type == FolderType.REGULAR) {
-                folderMap[serverId] = FolderListItem(serverId, name, type, pathDelimiter)
+                // Wren patch: pass the raw attributes through (see FolderListItem).
+                folderMap[serverId] = FolderListItem(serverId, name, type, pathDelimiter, listResponse.attributes)
             }
         }
 

@@ -47,9 +47,10 @@ Wren signs in with an IMAP username and an app password, entered on the watch.
     Trash. With Gmail's default IMAP settings (Auto-Expunge on, "Archive the
     message"), Gmail archives the message instead of trashing it. To send it
     to Trash, change that setting in Gmail's Forwarding and POP/IMAP settings.
-  - Archive moves the message to a folder named `Archive`, which Wren creates.
-    On Gmail that folder is an ordinary label called "Archive", so the message
-    leaves the inbox with that label attached. It is not Gmail's own archive.
+  - Archive moves the message to the folder the server marks as its archive.
+    On Gmail that is All Mail, so the message leaves the inbox the way Gmail's
+    own Archive button does. If the server marks no archive folder, Wren uses a
+    folder named `Archive` and creates it when it is missing.
 - Self-hosted servers, including ones with a self-signed certificate
 
 **Not supported:** Outlook.com, Hotmail and Live addresses, and Microsoft 365
@@ -66,8 +67,8 @@ These are left out on purpose for the first release:
 - OAuth sign-in (app passwords only)
 - HTML rendering and attachments
 - Push (IMAP IDLE): new mail arrives with the next background sync
-- Folders other than the inbox. Archive moves mail to a folder named `Archive`,
-  which Wren creates if it is missing.
+- Folders other than the inbox. Archive moves mail to the server's archive
+  folder (see above).
 - Older mail: the inbox shows only the 50 most recent messages
 - Offline reading: message bodies aren't cached, so opening one needs a
   connection

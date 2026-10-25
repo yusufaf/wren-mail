@@ -8,4 +8,7 @@ data class FolderListItem(
     val name: String,
     val type: FolderType,
     val folderPathDelimiter: FolderPathDelimiter? = null,
+    // Wren patch: the raw LIST attributes, so callers can tell \Archive from \All,
+    // which `type` folds together; see mail/NOTICE.md.
+    val attributes: List<String> = emptyList(),
 )

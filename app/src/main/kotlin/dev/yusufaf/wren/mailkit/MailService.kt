@@ -4,6 +4,7 @@ import com.fsck.k9.mail.AuthType
 import com.fsck.k9.mail.FetchProfile
 import com.fsck.k9.mail.ServerSettings
 import com.fsck.k9.mail.ssl.TrustedSocketFactory
+import com.fsck.k9.mail.store.imap.FolderListItem
 import com.fsck.k9.mail.store.imap.ImapClientInfo
 import com.fsck.k9.mail.store.imap.ImapFolder
 import com.fsck.k9.mail.store.imap.ImapStore
@@ -80,19 +81,19 @@ class MailService(
     private val storeMutex = Mutex()
     private var cachedAccount: Account? = null
     private var cachedStore: ImapStore? = null
-    // The store whose Archive folder has been confirmed to exist. Holding the
-    // store rather than a boolean ties the answer to one store identity: an
-    // archive still in flight on a replaced store can neither mark its
-    // successor verified nor, by failing, clear the successor's verification
-    // (see moveToArchive). Atomic because concurrent operations no longer
-    // share the storeMutex's happens-before edge. Two concurrent archives can
-    // both see a mismatch and both probe — unreachable through
-    // MailRepository, which flushes triage ops one at a time under its own
-    // lock, and self-healing via the pending-op queue if it ever happens.
-    private val archiveVerifiedStore = AtomicReference<ImapStore?>()
+    // The resolved archive folder, tagged with the store it was resolved on.
+    // Holding the store ties the answer to one store identity: an archive
+    // still in flight on a replaced store can neither hand its successor a
+    // folder nor, by failing, clear the successor's answer (see
+    // moveToArchive). Atomic because concurrent operations no longer share
+    // the storeMutex's happens-before edge. Two concurrent archives can both
+    // see a mismatch and both resolve — unreachable through MailRepository,
+    // which flushes triage ops one at a time under its own lock, and
+    // self-healing via the pending-op queue if it ever happens.
+    private val resolvedArchive = AtomicReference<ArchiveTarget?>()
 
     // The store that has completed its warm-up probe (see withStore). Guarded
-    // by storeMutex. Compared by identity, like archiveVerifiedStore, so a
+    // by storeMutex. Compared by identity, like resolvedArchive, so a
     // rebuilt store is cold without anything having to remember to reset it.
     private var warmedStore: ImapStore? = null
 
@@ -187,23 +188,22 @@ class MailService(
     }
 
     /**
-     * Moves the message to the archive folder, creating the folder if needed.
-     * The exists()/create() probe touches its own connection and is only
-     * worth paying for once per store lifetime — [archiveVerifiedStore] skips
-     * it (and the connection it would otherwise leave sitting unused in the
-     * pool) on every archive after the first.
+     * Moves the message to the folder the server marks as its archive (see
+     * [findArchiveFolder]), or to [ARCHIVE_FOLDER], created if needed, when it
+     * marks none. Resolving costs a LIST, plus an exists()/create() probe on
+     * the fallback, each on its own connection, so it is only worth paying for
+     * once per store lifetime — [resolvedArchive] skips it (and the connection
+     * it would otherwise leave sitting unused in the pool) on every archive
+     * after the first.
      */
     override suspend fun archiveMessage(account: Account, uid: String) {
         withStore(account) { store ->
-            val archive = store.getFolder(ARCHIVE_FOLDER)
-            if (archiveVerifiedStore.get() !== store) {
-                if (!archive.exists()) archive.create()
-                archiveVerifiedStore.set(store)
-            }
+            val target = archiveTargetFor(store)
+            val archive = store.getFolder(target.serverId)
             val inbox = store.getFolder(INBOX_FOLDER)
             try {
                 inbox.open(OpenMode.READ_WRITE)
-                moveToArchive(store, inbox, uid, archive)
+                moveToArchive(target, inbox, uid, archive)
             } finally {
                 inbox.close()
             }
@@ -211,24 +211,40 @@ class MailService(
     }
 
     /**
+     * A failed LIST propagates with nothing cached: falling back to
+     * [ARCHIVE_FOLDER] on a transient error would create the stray folder
+     * that discovery exists to avoid.
+     */
+    private fun archiveTargetFor(store: ImapStore): ArchiveTarget {
+        resolvedArchive.get()?.let { if (it.store === store) return it }
+        val serverId = findArchiveFolder(store.getFolders()) ?: ARCHIVE_FOLDER.also {
+            val folder = store.getFolder(it)
+            if (!folder.exists()) folder.create()
+        }
+        return ArchiveTarget(store, serverId).also(resolvedArchive::set)
+    }
+
+    /**
      * The move is the only call in [archiveMessage] that names the archive
-     * folder, so it is the only failure that can mean our cached "the folder
-     * exists" answer has gone stale (e.g. a NO [TRYCREATE] because the folder
-     * was removed server-side). Clearing [archiveVerifiedStore] on an inbox
-     * open failure, or any other transient network error, only buys an extra
-     * exists()/create() round trip on the retry of a connection that is
-     * already struggling. The clear is conditional on [store] still being the
-     * verified one: a move that fails on a replaced store says nothing about
+     * folder, so it is the only failure that can mean our cached answer has
+     * gone stale (e.g. a NO [TRYCREATE] because the folder was renamed or
+     * removed server-side). Clearing [resolvedArchive] on an inbox open
+     * failure, or any other transient network error, only buys an extra
+     * resolve round trip on the retry of a connection that is already
+     * struggling. The clear is conditional on [target] still being the
+     * resolved one: a move that fails on a replaced store says nothing about
      * its successor's archive folder.
      */
-    private fun moveToArchive(store: ImapStore, inbox: ImapFolder, uid: String, archive: ImapFolder) {
+    private fun moveToArchive(target: ArchiveTarget, inbox: ImapFolder, uid: String, archive: ImapFolder) {
         try {
             inbox.moveMessages(listOf(inbox.getMessage(uid)), archive)
         } catch (e: Exception) {
-            archiveVerifiedStore.compareAndSet(store, null)
+            resolvedArchive.compareAndSet(target, null)
             throw e
         }
     }
+
+    private class ArchiveTarget(val store: ImapStore, val serverId: String)
 
     /**
      * Closes any pooled connection without discarding the cached store, so
@@ -260,8 +276,8 @@ class MailService(
      * Called when a trust exception is revoked; an orphaned connection lingers
      * only until the server's idle timeout.
      *
-     * `archiveVerifiedStore` is left alone: it is compared by identity, so the
-     * discarded store's entry can't match its successor.
+     * `resolvedArchive` is left alone: it is compared by store identity, so
+     * the discarded store's entry can't match its successor.
      */
     suspend fun resetConnections() {
         withContext(Dispatchers.IO) {
@@ -369,4 +385,19 @@ class MailService(
         private const val INBOX_FOLDER = "INBOX"
         private const val ARCHIVE_FOLDER = "Archive"
     }
+}
+
+private const val ARCHIVE_ATTRIBUTE = "\\Archive"
+private const val ALL_ATTRIBUTE = "\\All"
+
+/**
+ * The server's archive folder per RFC 6154 SPECIAL-USE: the first folder
+ * marked `\Archive`, else the first marked `\All` (Gmail's All Mail, which
+ * marks no `\Archive`), else null when the server marks neither.
+ */
+internal fun findArchiveFolder(folders: List<FolderListItem>): String? {
+    fun marked(attribute: String) = folders.firstOrNull { folder ->
+        folder.attributes.any { it.equals(attribute, ignoreCase = true) }
+    }
+    return (marked(ARCHIVE_ATTRIBUTE) ?: marked(ALL_ATTRIBUTE))?.serverId
 }
