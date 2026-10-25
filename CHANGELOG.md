@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/yusufaf/wren-mail/compare/v0.1.0...v0.2.0) (2026-10-25)
+
+
+### Features
+
+* **account:** encrypt the stored IMAP password with a Keystore key ([#44](https://github.com/yusufaf/wren-mail/issues/44)) ([7c3de4a](https://github.com/yusufaf/wren-mail/commit/7c3de4a744e6a1981495b6ec2f62f053f485e1cc)), closes [#41](https://github.com/yusufaf/wren-mail/issues/41)
+
 ## 0.1.0 (2026-10-15)
 
 First release of Wren, a standalone email client for Wear OS that reads and triages IMAP mail directly on the watch.
@@ -28,5 +35,3 @@ Not in this release: compose and reply, HTML rendering, attachments, push (IMAP 
 * **mailkit:** scope the archive folder check and the store lock ([#14](https://github.com/yusufaf/wren-mail/issues/14)) ([2d07159](https://github.com/yusufaf/wren-mail/commit/2d07159eaa145f2ff4b5ab57f94ef9ea24ee9d41)), closes [#11](https://github.com/yusufaf/wren-mail/issues/11) [#12](https://github.com/yusufaf/wren-mail/issues/12)
 * **security:** keep account data out of backups and device transfer ([#36](https://github.com/yusufaf/wren-mail/issues/36)) ([cee3178](https://github.com/yusufaf/wren-mail/commit/cee3178ca3bcd6e37b31b9c3f9e9ae8461edeec6))
 * **ui:** ignore a fast second tap on the hostname-mismatch trust confirmation ([#26](https://github.com/yusufaf/wren-mail/issues/26)) ([b5f8f07](https://github.com/yusufaf/wren-mail/commit/b5f8f07d1c32c12089b2d9a497df08468dbf1b6c)), closes [#21](https://github.com/yusufaf/wren-mail/issues/21)
-
-
