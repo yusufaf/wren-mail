@@ -146,6 +146,26 @@ class MailRepositoryFlushTest {
     }
 
     @Test
+    fun `refresh applies a message's queued ops in queue order`() = runTest {
+        val repository = newRepository(inboxDao, pendingOpDao, mail)
+        mail.failures["1"] = rejected()
+        mail.failures["2"] = rejected()
+        pendingOpDao.insert(PendingOp(uid = "2", type = PendingOp.SET_FLAGGED, value = true))
+        pendingOpDao.insert(PendingOp(uid = "2", type = PendingOp.SET_SEEN, value = true))
+        pendingOpDao.insert(PendingOp(uid = "2", type = PendingOp.SET_FLAGGED, value = false))
+        pendingOpDao.insert(PendingOp(uid = "1", type = PendingOp.ARCHIVE))
+        pendingOpDao.insert(PendingOp(uid = "1", type = PendingOp.SET_FLAGGED, value = true))
+        mail.inbox = listOf(envelope("1"), envelope("2"))
+
+        repository.refresh(TEST_ACCOUNT)
+
+        assertEquals(setOf("2"), inboxDao.rows.keys)
+        assertEquals(false, inboxDao.rows.getValue("2").flagged)
+        assertEquals(false, inboxDao.rows.getValue("2").unread)
+        assertEquals(5, pendingOpDao.ops.size)
+    }
+
+    @Test
     fun `refresh throws when the inbox fetch fails`() = runTest {
         val repository = newRepository(inboxDao, pendingOpDao, mail)
         seedRow(inboxDao, "stale")
