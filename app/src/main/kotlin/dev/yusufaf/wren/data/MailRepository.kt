@@ -4,7 +4,10 @@ import dev.yusufaf.wren.account.Account
 import dev.yusufaf.wren.mailkit.Envelope
 import dev.yusufaf.wren.mailkit.MailOperations
 import dev.yusufaf.wren.mailkit.MessageDetail
+import dev.yusufaf.wren.mailkit.isConnectionLevel
+import dev.yusufaf.wren.mailkit.isLoginRejection
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -15,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import net.thunderbird.legacy.logging.Log
 
 /**
  * Cache-first facade over [MailOperations]. The inbox renders from Room and is
@@ -53,10 +57,26 @@ class MailRepository(
     /** Closes any pooled connection; called when the app backgrounds. */
     suspend fun releaseConnections() = mailService.releaseConnections()
 
-    /** Flushes pending ops, then replaces the cache with the live inbox. Throws on failure. */
+    /**
+     * Flushes pending ops, then replaces the cache with the live inbox, with
+     * any op still queued re-applied on top so an action that hasn't reached
+     * the server yet doesn't visibly revert. A failed flush leaves its ops
+     * queued for the next sync and doesn't stop the fetch, unless the server
+     * rejected the login: the fetch would log in with the same credentials,
+     * and each failed attempt counts toward a provider lockout. Throws when
+     * the inbox fetch fails or the login was rejected.
+     */
     suspend fun refresh(account: Account) {
-        flushPendingOps(account)
-        val envelopes = mailService.fetchInbox(account)
+        try {
+            flushPendingOps(account)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (e.isLoginRejection()) throw e
+            Log.w(e, "Couldn't flush pending ops; refreshing the inbox anyway")
+        }
+        // Read after the fetch, so an op queued while it ran is still applied.
+        val envelopes = mailService.fetchInbox(account).withQueuedOps(pendingOpDao.due(now()))
         inboxDao.replaceAll(
             envelopes.mapIndexed { index, e ->
                 CachedEnvelope(e.uid, e.sender, e.subject, e.date, e.unread, e.flagged, index)
@@ -172,24 +192,59 @@ class MailRepository(
     }
 
     /**
-     * Sends ops that are due, removing each on success. Stops and throws on
-     * the first failure so the remainder is retried later. The IMAP ops are
-     * safe to repeat: UID commands on a message that is already gone no-op
-     * server-side. An ARCHIVE still inside its undo window is not due yet —
-     * see [PendingOp.notBeforeMs] — so this can be called freely (including
-     * by the sync worker) without racing an in-progress undo.
+     * Sends due ops in queue order, removing each on success. A
+     * connection-level failure (see [isConnectionLevel]) stops the flush and
+     * throws, since the rest would fail the same way. An op the server
+     * rejects stays queued and is skipped along with every later op for the
+     * same message, so per-message order holds while other messages go
+     * through; it is retried on every flush, with no attempt cap yet. The
+     * IMAP ops are safe to repeat: UID commands on a message that is already
+     * gone no-op server-side. An ARCHIVE still inside its undo window is not
+     * due yet — see [PendingOp.notBeforeMs] — so this can be called freely
+     * (including by the sync worker) without racing an in-progress undo.
      */
     suspend fun flushPendingOps(account: Account) {
         flushMutex.withLock {
+            val blockedUids = mutableSetOf<String>()
             for (op in pendingOpDao.due(now())) {
-                when (op.type) {
-                    PendingOp.ARCHIVE -> mailService.archiveMessage(account, op.uid)
-                    PendingOp.DELETE -> mailService.deleteMessage(account, op.uid)
-                    PendingOp.SET_FLAGGED -> mailService.setFlagged(account, op.uid, op.value)
-                    PendingOp.SET_SEEN -> mailService.setUnread(account, op.uid, !op.value)
+                if (op.uid in blockedUids) continue
+                try {
+                    send(account, op)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (e.isConnectionLevel()) throw e
+                    Log.w(e, "Server rejected pending ${op.type} for ${op.uid}; keeping it queued")
+                    blockedUids += op.uid
+                    continue
                 }
+                // Outside the try, so a database failure is never taken for a server rejection.
                 pendingOpDao.delete(op.id)
             }
         }
     }
+
+    private suspend fun send(account: Account, op: PendingOp) {
+        when (op.type) {
+            PendingOp.ARCHIVE -> mailService.archiveMessage(account, op.uid)
+            PendingOp.DELETE -> mailService.deleteMessage(account, op.uid)
+            PendingOp.SET_FLAGGED -> mailService.setFlagged(account, op.uid, op.value)
+            PendingOp.SET_SEEN -> mailService.setUnread(account, op.uid, !op.value)
+        }
+    }
+}
+
+/** The inbox as the user sees it: [ops] (in queue order) applied on top of the server's state. */
+private fun List<Envelope>.withQueuedOps(ops: List<PendingOp>): List<Envelope> {
+    if (ops.isEmpty()) return this
+    val byUid = associateByTo(LinkedHashMap()) { it.uid }
+    for (op in ops) {
+        val e = byUid[op.uid] ?: continue
+        when (op.type) {
+            PendingOp.ARCHIVE, PendingOp.DELETE -> byUid.remove(op.uid)
+            PendingOp.SET_FLAGGED -> byUid[op.uid] = e.copy(flagged = op.value)
+            PendingOp.SET_SEEN -> byUid[op.uid] = e.copy(unread = !op.value)
+        }
+    }
+    return byUid.values.toList()
 }
