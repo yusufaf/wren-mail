@@ -29,5 +29,9 @@ following patches, each marked with a `Wren patch:` comment at the site:
 - `com/fsck/k9/mail/ssl/LocalKeyStore.kt` — `getCertificates()` added, a
   read-only enumeration of the stored trust exceptions for Wren's
   trusted-certificates screen. Upstream has no listing API.
+- `com/fsck/k9/mail/store/imap/FolderListItem.kt` and `RealImapStore.kt` —
+  `FolderListItem` carries the raw LIST attributes. Upstream folds `\Archive`
+  and `\All` into `FolderType.ARCHIVE`, and Wren's archive action has to
+  prefer `\Archive`.
 
 The vendored sources are otherwise unmodified from upstream.

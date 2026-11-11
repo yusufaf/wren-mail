@@ -28,6 +28,15 @@ import net.thunderbird.core.common.mail.Flag
 
 internal const val INBOX = "INBOX"
 internal const val ARCHIVE = "Archive"
+internal const val ALL_MAIL = "[Gmail]/All Mail"
+
+/** A LIST entry as `RealImapStore.getFolders` would return it. */
+internal fun listed(serverId: String, vararg attributes: String) = FolderListItem(
+    serverId = serverId,
+    name = serverId,
+    type = FolderType.REGULAR,
+    attributes = attributes.toList(),
+)
 
 internal val TEST_ACCOUNT = Account(
     host = "localhost",
@@ -214,7 +223,19 @@ internal class FakeImapStore : ImapStore {
 
     override fun checkSettings() = Unit
 
-    override fun getFolders(): List<FolderListItem> = emptyList()
+    /** What [getFolders] returns; empty, like a server with no SPECIAL-USE folders, by default. */
+    @Volatile
+    var listedFolders: List<FolderListItem> = emptyList()
+    val getFoldersCalls = AtomicInteger()
+
+    @Volatile
+    var onGetFolders: () -> Unit = {}
+
+    override fun getFolders(): List<FolderListItem> {
+        getFoldersCalls.incrementAndGet()
+        onGetFolders()
+        return listedFolders
+    }
 
     override fun fetchImapPrefix() = Unit
 }

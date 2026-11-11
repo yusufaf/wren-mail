@@ -1,5 +1,7 @@
 package dev.yusufaf.wren.mailkit
 
+import com.fsck.k9.mail.store.imap.FolderListItem
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -133,5 +135,142 @@ class MailServiceArchiveTest {
         // The old store's failure says nothing about the new store's folder.
         service.archiveMessage(OTHER_ACCOUNT, "4")
         assertEquals(1, newStore.script(ARCHIVE).existsCalls.get())
+    }
+
+    @Test
+    fun `archives to the folder the server marks Archive`() = runBlocking {
+        val moved = CopyOnWriteArrayList<String>()
+        val factory = recordingMoves(moved, MARKED_ARCHIVE)
+        val service = MailService(FakeSocketFactory, factory)
+
+        service.archiveMessage(TEST_ACCOUNT, "1")
+
+        assertEquals(listOf("Archiv"), moved)
+        val store = factory.stores.single()
+        assertEquals(0, store.script(ARCHIVE).existsCalls.get())
+        assertEquals(0, store.script(ARCHIVE).createCalls.get())
+    }
+
+    @Test
+    fun `archives to the All folder when nothing is marked Archive`() = runBlocking {
+        val moved = CopyOnWriteArrayList<String>()
+        val factory = recordingMoves(
+            moved,
+            listOf(listed("[Gmail]/Sent Mail", "\\Sent"), listed(ALL_MAIL, "\\HasNoChildren", "\\All")),
+        )
+        val service = MailService(FakeSocketFactory, factory)
+
+        service.archiveMessage(TEST_ACCOUNT, "1")
+
+        assertEquals(listOf(ALL_MAIL), moved)
+        val store = factory.stores.single()
+        assertEquals(0, store.script(ARCHIVE).existsCalls.get())
+        assertEquals(0, store.script(ARCHIVE).createCalls.get())
+    }
+
+    @Test
+    fun `prefers the Archive folder over the All folder`() = runBlocking {
+        val moved = CopyOnWriteArrayList<String>()
+        // \All listed first, so list order can't explain the choice.
+        val factory = recordingMoves(moved, listOf(listed(ALL_MAIL, "\\All"), listed("Archive.2026", "\\Archive")))
+        val service = MailService(FakeSocketFactory, factory)
+
+        service.archiveMessage(TEST_ACCOUNT, "1")
+
+        assertEquals(listOf("Archive.2026"), moved)
+    }
+
+    @Test
+    fun `falls back to creating Archive when no folder is marked`() = runBlocking {
+        val moved = CopyOnWriteArrayList<String>()
+        val factory = recordingMoves(moved, listOf(listed("Sent", "\\Sent"))) { store ->
+            store.script(ARCHIVE).folderExists = false
+        }
+        val service = MailService(FakeSocketFactory, factory)
+
+        service.archiveMessage(TEST_ACCOUNT, "1")
+
+        assertEquals(listOf(ARCHIVE), moved)
+        val store = factory.stores.single()
+        assertEquals(1, store.script(ARCHIVE).existsCalls.get())
+        assertEquals(1, store.script(ARCHIVE).createCalls.get())
+    }
+
+    @Test
+    fun `lists folders once per store`() = runBlocking {
+        val factory = recordingMoves(CopyOnWriteArrayList(), MARKED_ARCHIVE)
+        val service = MailService(FakeSocketFactory, factory)
+
+        service.archiveMessage(TEST_ACCOUNT, "1")
+        service.archiveMessage(TEST_ACCOUNT, "2")
+
+        assertEquals(1, factory.stores.single().getFoldersCalls.get())
+    }
+
+    @Test
+    fun `move failure re-resolves the archive folder`() = runBlocking {
+        val moved = CopyOnWriteArrayList<String>()
+        val factory = recordingMoves(moved, MARKED_ARCHIVE)
+        val service = MailService(FakeSocketFactory, factory)
+
+        service.archiveMessage(TEST_ACCOUNT, "1")
+        val store = factory.stores.single()
+        val recordMove = store.script(INBOX).onMove
+
+        store.script(INBOX).onMove = { throw MessagingException("NO [TRYCREATE] no such mailbox") }
+        assertTrue(
+            runCatching { service.archiveMessage(TEST_ACCOUNT, "2") }.exceptionOrNull()
+                is MessagingException,
+        )
+
+        store.script(INBOX).onMove = recordMove
+        service.archiveMessage(TEST_ACCOUNT, "3")
+
+        // The folder may have been renamed or removed, so the move failure
+        // must send the next archive back to the server's folder list.
+        assertEquals(2, store.getFoldersCalls.get())
+        assertEquals(listOf("Archiv", "Archiv"), moved)
+    }
+
+    @Test
+    fun `folder list failure neither creates Archive nor caches`() = runBlocking {
+        val moved = CopyOnWriteArrayList<String>()
+        val factory = recordingMoves(moved, emptyList()) { store ->
+            store.onGetFolders = { throw MessagingException("BAD") }
+        }
+        val service = MailService(FakeSocketFactory, factory)
+
+        assertTrue(
+            runCatching { service.archiveMessage(TEST_ACCOUNT, "1") }.exceptionOrNull()
+                is MessagingException,
+        )
+
+        val store = factory.stores.single()
+        // Falling back to Archive on a failed LIST would create the very
+        // stray folder that discovery exists to avoid.
+        assertEquals(0, store.script(INBOX).moveCalls.get())
+        assertEquals(0, store.script(ARCHIVE).existsCalls.get())
+        assertEquals(0, store.script(ARCHIVE).createCalls.get())
+
+        store.onGetFolders = {}
+        store.listedFolders = MARKED_ARCHIVE
+        service.archiveMessage(TEST_ACCOUNT, "2")
+
+        assertEquals(2, store.getFoldersCalls.get())
+        assertEquals(listOf("Archiv"), moved)
+    }
+
+    private fun recordingMoves(
+        moved: MutableList<String>,
+        folders: List<FolderListItem>,
+        configure: (FakeImapStore) -> Unit = {},
+    ) = RecordingStoreFactory { store ->
+        store.listedFolders = folders
+        store.script(INBOX).onMove = { moved += it.serverId }
+        configure(store)
+    }
+
+    private companion object {
+        val MARKED_ARCHIVE = listOf(listed("Archiv", "\\HasNoChildren", "\\Archive"), listed("Sent", "\\Sent"))
     }
 }
